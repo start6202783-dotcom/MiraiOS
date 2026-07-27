@@ -5,6 +5,27 @@ Todas as mudanças relevantes do MiraiOS serão documentadas neste arquivo.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e
 o projeto utiliza [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.6.0] - 2026-07-27
+
+### Adicionado
+
+- Mirai Agent HTTP com armazenamento local de modelos e eventos;
+- registro persistente de dispositivos em `~/.mirai/devices.json`;
+- comandos `mirai device add/list/info/remove`;
+- comando `mirai deploy` com validação local e verificação SHA-256;
+- comando `mirai logs` para consultar eventos recentes;
+- comando `mirai agent start` com escuta segura em localhost;
+- ambiente Docker Compose para simular um dispositivo sem hardware físico;
+- testes integrados entre CLI, cliente HTTP e Agent.
+
+### Segurança
+
+- o Agent escuta somente em `127.0.0.1` por padrão;
+- uploads são limitados a 512 MB;
+- nomes de arquivo são sanitizados antes do armazenamento;
+- modelos são validados e carregados no runtime antes de ficarem prontos;
+- esta versão não deve ser exposta diretamente à internet.
+
 ## [0.5.1] - 2026-07-27
 
 ### Adicionado
@@ -45,3 +66,4 @@ o projeto utiliza [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 [0.5.1]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/start6202783-dotcom/MiraiOS/releases/tag/v0.5.0
+[0.6.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.5.1...v0.6.0

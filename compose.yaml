@@ -1,0 +1,13 @@
+services:
+  mirai-agent:
+    build:
+      context: .
+      dockerfile: docker/agent.Dockerfile
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - mirai-agent-data:/var/lib/mirai
+    restart: unless-stopped
+
+volumes:
+  mirai-agent-data:

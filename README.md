@@ -4,7 +4,7 @@
 
 ### The Future Runs Local
 
-Framework Python enxuto para validar, inspecionar, executar e medir modelos
+Plataforma Python enxuta para validar, implantar, executar e observar modelos
 ONNX em hardware local.
 
 [![PyPI](https://img.shields.io/pypi/v/miraios.svg?color=blue&label=PyPI)](https://pypi.org/project/miraios/)
@@ -14,6 +14,7 @@ ONNX em hardware local.
 
 [Instalação](#-instalação) •
 [Comandos](#-mirai-cli) •
+[Deploy](#primeiro-deploy-com-o-mirai-agent) •
 [Entradas](#-entradas-de-modelo) •
 [Roadmap](#-roadmap) •
 [Contribuição](#-desenvolvimento-e-contribuição)
@@ -31,7 +32,9 @@ operações essenciais de Edge AI:
 - inspecionar nomes, tipos e shapes de tensores;
 - executar inferências numéricas ou com imagens;
 - preparar múltiplas entradas com os tipos esperados pelo modelo;
-- medir latência e vazão localmente.
+- medir latência e vazão localmente;
+- cadastrar dispositivos que executam o Mirai Agent;
+- enviar e validar modelos em outro ambiente Linux.
 
 > Execute IA onde os dados são gerados.
 
@@ -46,35 +49,38 @@ permitir operação offline e diminuir a dependência de infraestrutura em nuvem
 | --- | --- |
 | Projeto | Hikari |
 | Fase | MVP |
-| Versão do código | v0.5.1 |
+| Versão do código | v0.6.0 |
 | Distribuição | PyPI |
 | Provider atual | ONNX Runtime CPU |
+| Destino de deploy | Mirai Agent local/Linux |
 | Licença | MIT |
 
-A v0.5.1 é uma versão de estabilização. A interface pública ainda pode evoluir
-durante o MVP, mas os comportamentos documentados são cobertos por testes
-automatizados em Python 3.10, 3.11, 3.12 e 3.13.
+A v0.6 é o primeiro marco de deploy do Projeto Hikari. A CLI e o Agent são
+processos independentes, permitindo desenvolver o protocolo de dispositivos
+com Docker antes da compra ou empréstimo de uma placa física.
 
 ---
 
 ## 🏗️ Arquitetura
 
 ```mermaid
-flowchart TD
+flowchart LR
     CLI["Mirai CLI"]
-    INSPECT["Validação e inspeção"]
-    INPUTS["Preparação de tensores"]
+    REGISTRY["Registro de dispositivos"]
+    AGENT["Mirai Agent"]
+    VALIDATE["ONNX + SHA-256"]
     RUNTIME["ONNX Runtime"]
-    HARDWARE["CPU local"]
+    HARDWARE["Linux local / futuro ARM64"]
 
-    CLI --> INSPECT
-    CLI --> INPUTS
-    INPUTS --> RUNTIME
+    CLI --> REGISTRY
+    CLI --> AGENT
+    AGENT --> VALIDATE
+    VALIDATE --> RUNTIME
     RUNTIME --> HARDWARE
 ```
 
-O pacote separa a CLI, validação, preparação de entradas, runtime e benchmark
-em módulos independentes e testáveis.
+O pacote separa CLI, registro de dispositivos, cliente HTTP, Agent, validação,
+preparação de entradas, runtime e benchmark em módulos independentes.
 
 ### 🧰 Mirai CLI
 
@@ -85,6 +91,10 @@ em módulos independentes e testáveis.
 | `mirai info modelo.onnx` | Exibe entradas, saídas, shapes, tipos e nós. |
 | `mirai run modelo.onnx --input 5` | Executa uma inferência. |
 | `mirai benchmark modelo.onnx` | Mede latência, mediana, P95 e IPS. |
+| `mirai agent start` | Inicia um Agent local de desenvolvimento. |
+| `mirai device add/list/info/remove` | Gerencia destinos de deploy. |
+| `mirai deploy modelo.onnx --device local` | Envia e valida um modelo. |
+| `mirai logs --device local` | Exibe eventos recentes do Agent. |
 
 ---
 
@@ -124,6 +134,35 @@ mirai --version
 ---
 
 ## ⚡ Uso rápido
+
+### Primeiro deploy com o Mirai Agent
+
+Em um terminal, inicie um dispositivo local:
+
+```bash
+mirai agent start
+```
+
+Em outro terminal, cadastre o Agent:
+
+```bash
+mirai device add local --url http://127.0.0.1:8080
+mirai device info local
+```
+
+Envie um modelo e consulte o evento:
+
+```bash
+mirai deploy seu_modelo.onnx --device local
+mirai logs --device local
+```
+
+O Agent compara o SHA-256, valida o arquivo com `onnx.checker` e confirma que o
+modelo abre no ONNX Runtime do destino antes de registrar o deployment como
+pronto.
+
+Para simular o dispositivo em um container, consulte
+[Projeto Hikari v0.6](docs/hikari-v0.6.md).
 
 ### Validar de verdade um modelo
 
@@ -213,7 +252,7 @@ mirai benchmark visao.onnx \
 
 ## 🧩 Entradas de modelo
 
-| Recurso | v0.5.1 |
+| Recurso | v0.6 |
 | --- | --- |
 | Escalares numéricos | ✅ |
 | Arrays JSON | ✅ |
@@ -228,7 +267,7 @@ mirai benchmark visao.onnx \
 | Normalização específica por modelo | Ainda não |
 | Providers CUDA e DirectML | Roadmap |
 
-O pré-processamento de visão da v0.5.1 é propositalmente básico. Modelos que
+O pré-processamento de visão da v0.6 é propositalmente básico. Modelos que
 exigem mean/std, letterbox, BGR ou tokenização devem receber tensores já
 preparados ou aguardar os perfis de pré-processamento previstos no roadmap.
 
@@ -247,8 +286,22 @@ preparados ou aguardar os perfis de pré-processamento previstos no roadmap.
 - [x] Adicionar testes automatizados.
 - [x] Adicionar CI para Python 3.10–3.13.
 
+### Projeto Hikari — deploy v0.6
+
+- [x] Criar um Mirai Agent independente.
+- [x] Registrar dispositivos por nome e URL.
+- [x] Detectar sistema, arquitetura e providers do destino.
+- [x] Enviar modelos com verificação SHA-256.
+- [x] Validar e abrir o modelo no runtime do Agent.
+- [x] Persistir eventos e expô-los por `mirai logs`.
+- [x] Simular um dispositivo com Docker Compose.
+- [x] Manter o Agent restrito a localhost por padrão.
+
 ### Próximas versões
 
+- [ ] Adicionar pareamento e autenticação entre CLI e Agent.
+- [ ] Criar pacote reproduzível `.mirai`.
+- [ ] Executar inferência remota e health checks de modelos.
 - [ ] Selecionar providers CUDA e DirectML.
 - [ ] Exportar relatórios de benchmark em JSON.
 - [ ] Detectar automaticamente o hardware local.
@@ -263,14 +316,21 @@ preparados ou aguardar os perfis de pré-processamento previstos no roadmap.
 ```text
 MiraiOS/
 ├── .github/workflows/ci.yml
+├── docker/
+│   └── agent.Dockerfile
+├── docs/
+│   └── hikari-v0.6.md
 ├── examples/
 │   └── dummy_model.onnx
 ├── scripts/
 │   └── create_dummy_model.py
 ├── src/mirai/
 │   ├── __init__.py
+│   ├── agent.py
+│   ├── agent_client.py
 │   ├── benchmark.py
 │   ├── cli.py
+│   ├── devices.py
 │   ├── errors.py
 │   ├── inputs.py
 │   ├── inspect.py
@@ -278,6 +338,7 @@ MiraiOS/
 │   └── runtime.py
 ├── tests/
 ├── CHANGELOG.md
+├── compose.yaml
 ├── CONTRIBUTING.md
 ├── LICENSE
 ├── pyproject.toml
