@@ -10,10 +10,11 @@ from time import perf_counter
 from typing import Any
 
 
-VERSION = "MiraiOS CLI v0.4.0 (Projeto Hikari)"
+VERSION = "MiraiOS CLI v0.5.0 (Projeto Hikari)"
 ONNX_EXTENSION = ".onnx"
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 BYTES_PER_KB = 1024
-DEFAULT_INPUT_VALUE = 1.0
+DEFAULT_INPUT_VALUE = "1.0"
 DEFAULT_BENCHMARK_RUNS = 50
 
 
@@ -158,7 +159,6 @@ def normalize_inference_result(outputs: list[object]) -> object:
     ]
     result: object = normalized[0] if len(normalized) == 1 else normalized
 
-    # Remove dimensões unitárias externas, como ``[2.0]``.
     while isinstance(result, list) and len(result) == 1:
         result = result[0]
 
@@ -167,7 +167,6 @@ def normalize_inference_result(outputs: list[object]) -> object:
 
 def load_runtime_dependencies() -> tuple[Any, Any]:
     """Carrega as dependências do runtime somente quando necessárias."""
-    # Imports tardios mantêm os demais comandos disponíveis sem o runtime.
     try:
         import onnxruntime as ort
     except ModuleNotFoundError as error:
@@ -187,9 +186,44 @@ def load_runtime_dependencies() -> tuple[Any, Any]:
     return ort, np
 
 
+def process_image_input(image_path: Path, input_meta: Any, np: Any) -> Any:
+    """Carrega e pré-processa uma imagem para ser consumida como tensor ONNX."""
+    try:
+        from PIL import Image
+    except ModuleNotFoundError as error:
+        raise MiraiRuntimeError(
+            "a dependência 'Pillow' é necessária para processar imagens. "
+            "Execute: python -m pip install Pillow"
+        ) from error
+
+    if not image_path.exists():
+        raise MiraiRuntimeError(f"imagem de entrada não encontrada: {image_path}")
+
+    try:
+        image = Image.open(image_path).convert("RGB")
+    except Exception as error:
+        raise MiraiRuntimeError(f"falha ao abrir a imagem: {error}") from error
+
+    # Extrai a dimensão esperada pelo modelo (padrão: 224x224)
+    target_h, target_w = 224, 224
+    shape = input_meta.shape
+    if len(shape) == 4:
+        if isinstance(shape[2], int) and isinstance(shape[3], int):
+            target_h, target_w = shape[2], shape[3]
+
+    image = image.resize((target_w, target_h))
+    tensor = np.asarray(image, dtype=np.float32) / 255.0
+
+    # Se a entrada for do tipo NCHW (batch, canais, altura, largura)
+    if len(shape) == 4 and (shape[1] == 3 or shape[1] == "3"):
+        tensor = tensor.transpose(2, 0, 1)
+
+    return np.expand_dims(tensor, axis=0)
+
+
 def prepare_inference(
     model_path: Path,
-    input_value: float,
+    input_value_str: str,
     ort: Any,
     np: Any,
 ) -> tuple[Any, dict[str, Any]]:
@@ -203,10 +237,21 @@ def prepare_inference(
         if not model_inputs:
             raise ValueError("o modelo não possui entradas")
 
-        input_name = model_inputs[0].name
-        input_data = np.asarray([input_value], dtype=np.float32)
+        input_meta = model_inputs[0]
+        input_name = input_meta.name
+
+        possible_image_path = Path(input_value_str)
+        if possible_image_path.suffix.lower() in IMAGE_EXTENSIONS:
+            print(f"[MiraiOS] Processando imagem de entrada: {possible_image_path.name}")
+            input_data = process_image_input(possible_image_path, input_meta, np)
+        else:
+            val = float(input_value_str)
+            input_data = np.asarray([val], dtype=np.float32)
+
+    except MiraiRuntimeError:
+        raise
     except Exception as error:
-        raise MiraiRuntimeError(f"falha ao carregar o modelo: {error}") from error
+        raise MiraiRuntimeError(f"falha ao preparar a inferência: {error}") from error
 
     return session, {input_name: input_data}
 
@@ -226,7 +271,7 @@ def execute_inference(
     return outputs, elapsed_ms
 
 
-def run_model(model_path: Path, input_value: float) -> int:
+def run_model(model_path: Path, input_value_str: str) -> int:
     """Carrega um modelo ONNX e executa uma inferência na CPU."""
     if error := get_model_path_error(model_path):
         return print_error(error)
@@ -237,12 +282,12 @@ def run_model(model_path: Path, input_value: float) -> int:
         return print_error(str(error))
 
     print(f"[MiraiOS] Carregando modelo: {model_path.name}")
-    print(f"[MiraiOS] Entrada fornecida: {input_value}")
+    print(f"[MiraiOS] Entrada fornecida: {input_value_str}")
 
     try:
         session, input_feed = prepare_inference(
             model_path,
-            input_value,
+            input_value_str,
             ort,
             np,
         )
@@ -375,11 +420,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument(
         "--input",
-        dest="input_value",
-        type=float,
+        dest="input_value_str",
+        type=str,
         default=DEFAULT_INPUT_VALUE,
-        metavar="VALOR",
-        help="valor numérico de entrada (padrão: 1.0)",
+        metavar="VALOR_OU_IMAGEM",
+        help="valor numérico ou caminho para imagem (.jpg, .png) (padrão: 1.0)",
     )
 
     benchmark_parser = subparsers.add_parser(
@@ -419,12 +464,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return show_model_info(args.model_path)
 
     if args.command == "run":
-        return run_model(args.model_path, args.input_value)
+        return run_model(args.model_path, args.input_value_str)
 
     if args.command == "benchmark":
         return benchmark_model(args.model_path, args.runs)
 
-    # Sem comando, orienta o usuário exibindo a ajuda completa.
     parser.print_help()
     return 0
 
