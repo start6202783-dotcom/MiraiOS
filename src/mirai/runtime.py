@@ -1,0 +1,107 @@
+"""Sessões e inferências locais com ONNX Runtime."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from time import perf_counter
+from typing import Any
+
+from .errors import MiraiRuntimeError
+from .inputs import build_input_feed
+from .inspect import ensure_model_path
+
+
+def load_runtime_dependencies() -> tuple[Any, Any]:
+    """Carrega ONNX Runtime e NumPy apenas quando necessários."""
+    try:
+        import onnxruntime as ort
+    except ModuleNotFoundError as error:
+        raise MiraiRuntimeError(
+            "a dependência 'onnxruntime' não está instalada"
+        ) from error
+
+    try:
+        import numpy as np
+    except ModuleNotFoundError as error:
+        raise MiraiRuntimeError("a dependência 'numpy' não está instalada") from error
+
+    return ort, np
+
+
+def create_session(model_path: Path, ort: Any) -> Any:
+    """Cria uma sessão de inferência usando o provider de CPU."""
+    ensure_model_path(model_path)
+    try:
+        return ort.InferenceSession(
+            str(model_path),
+            providers=["CPUExecutionProvider"],
+        )
+    except Exception as error:
+        raise MiraiRuntimeError(
+            f"falha ao carregar o modelo no ONNX Runtime: {error}"
+        ) from error
+
+
+def prepare_inference(
+    model_path: Path,
+    input_specs: list[str] | None = None,
+    layout: str = "auto",
+) -> tuple[Any, dict[str, Any]]:
+    """Cria a sessão e prepara todas as entradas do modelo."""
+    ort, np = load_runtime_dependencies()
+    session = create_session(model_path, ort)
+    input_feed = build_input_feed(
+        session.get_inputs(),
+        input_specs,
+        np,
+        layout,
+    )
+    return session, input_feed
+
+
+def execute_inference(
+    session: Any,
+    input_feed: dict[str, Any],
+) -> tuple[list[object], float]:
+    """Executa uma inferência e retorna saídas e latência em milissegundos."""
+    started_at = perf_counter()
+    try:
+        outputs = session.run(None, input_feed)
+    except Exception as error:
+        raise MiraiRuntimeError(f"falha ao executar o modelo: {error}") from error
+    return outputs, (perf_counter() - started_at) * 1000
+
+
+def normalize_inference_result(outputs: list[object]) -> object:
+    """Converte saídas pequenas em listas e resume tensores extensos."""
+    normalized: list[object] = []
+    for output in outputs:
+        if hasattr(output, "size") and output.size > 64:
+            flat = output.reshape(-1)
+            normalized.append(
+                {
+                    "shape": list(output.shape),
+                    "dtype": str(output.dtype),
+                    "preview": flat[:8].tolist(),
+                }
+            )
+        else:
+            normalized.append(
+                output.tolist() if hasattr(output, "tolist") else output
+            )
+
+    result: object = normalized[0] if len(normalized) == 1 else normalized
+    while isinstance(result, list) and len(result) == 1:
+        result = result[0]
+    return result
+
+
+def run_model(
+    model_path: Path,
+    input_specs: list[str] | None = None,
+    layout: str = "auto",
+) -> tuple[object, float]:
+    """Prepara e executa uma inferência local."""
+    session, input_feed = prepare_inference(model_path, input_specs, layout)
+    outputs, elapsed_ms = execute_inference(session, input_feed)
+    return normalize_inference_result(outputs), elapsed_ms
