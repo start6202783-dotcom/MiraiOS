@@ -12,6 +12,20 @@ from onnx import TensorProto, helper, numpy_helper
 from PIL import Image
 
 
+TEST_MODEL_IR_VERSION = 10
+
+
+def save_runtime_compatible_model(
+    model: onnx.ModelProto,
+    path: Path,
+) -> Path:
+    """Salva uma fixture compatível com toda a matriz do ONNX Runtime."""
+    model.ir_version = TEST_MODEL_IR_VERSION
+    onnx.checker.check_model(model)
+    onnx.save(model, path)
+    return path
+
+
 @pytest.fixture
 def model_factory(
     tmp_path: Path,
@@ -38,8 +52,7 @@ def model_factory(
             opset_imports=[helper.make_opsetid("", 13)],
         )
         path = tmp_path / f"{name}.onnx"
-        onnx.save(model, path)
-        return path
+        return save_runtime_compatible_model(model, path)
 
     return factory
 
@@ -79,8 +92,7 @@ def dummy_model(tmp_path: Path) -> Path:
         opset_imports=[helper.make_opsetid("", 13)],
     )
     path = tmp_path / "dummy.onnx"
-    onnx.save(model, path)
-    return path
+    return save_runtime_compatible_model(model, path)
 
 
 @pytest.fixture
@@ -97,8 +109,7 @@ def multi_input_model(tmp_path: Path) -> Path:
         opset_imports=[helper.make_opsetid("", 13)],
     )
     path = tmp_path / "multi-input.onnx"
-    onnx.save(model, path)
-    return path
+    return save_runtime_compatible_model(model, path)
 
 
 @pytest.fixture
