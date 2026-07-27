@@ -10,7 +10,7 @@ from time import perf_counter
 from typing import Any
 
 
-VERSION = "MiraiOS CLI v0.3.0 (Projeto Hikari)"
+VERSION = "MiraiOS CLI v0.4.0 (Projeto Hikari)"
 ONNX_EXTENSION = ".onnx"
 BYTES_PER_KB = 1024
 DEFAULT_INPUT_VALUE = 1.0
@@ -64,6 +64,89 @@ def validate_model(model_path: Path) -> int:
         f"[MiraiOS] Modelo ONNX válido encontrado: {model_path.name} "
         f"(Tamanho: {size_kb:.2f} KB)"
     )
+    return 0
+
+
+def load_onnx_model(model_path: Path) -> tuple[Any, Any]:
+    """Carrega a biblioteca ONNX e o modelo solicitado."""
+    try:
+        import onnx
+    except ModuleNotFoundError as error:
+        raise MiraiRuntimeError(
+            "a dependência 'onnx' não está instalada. "
+            "Execute: python -m pip install onnx"
+        ) from error
+
+    try:
+        model = onnx.load(str(model_path))
+    except Exception as error:
+        raise MiraiRuntimeError(
+            f"falha ao carregar o modelo ONNX: {error}"
+        ) from error
+
+    return onnx, model
+
+
+def describe_value_info(value_info: Any, onnx: Any) -> tuple[str, str]:
+    """Formata o shape e o tipo de uma entrada ou saída ONNX."""
+    if not value_info.type.HasField("tensor_type"):
+        return "N/A", "NÃO TENSOR"
+
+    tensor_type = value_info.type.tensor_type
+    dimensions: list[str] = []
+
+    for dimension in tensor_type.shape.dim:
+        dimension_kind = dimension.WhichOneof("value")
+        if dimension_kind == "dim_value":
+            dimensions.append(str(dimension.dim_value))
+        elif dimension_kind == "dim_param":
+            dimensions.append(dimension.dim_param or "?")
+        else:
+            dimensions.append("?")
+
+    shape = f"[{', '.join(dimensions)}]"
+
+    try:
+        data_type = onnx.TensorProto.DataType.Name(tensor_type.elem_type)
+    except (KeyError, ValueError):
+        data_type = f"DESCONHECIDO ({tensor_type.elem_type})"
+
+    return shape, data_type
+
+
+def print_value_info_section(
+    title: str,
+    values: Sequence[Any],
+    onnx: Any,
+) -> None:
+    """Exibe uma seção de entradas ou saídas do modelo."""
+    print(f"[MiraiOS] {title}:")
+
+    if not values:
+        print("[MiraiOS]   Nenhuma")
+        return
+
+    for value_info in values:
+        shape, data_type = describe_value_info(value_info, onnx)
+        print(f"[MiraiOS]   - Nome: {value_info.name}")
+        print(f"[MiraiOS]     Shape: {shape}")
+        print(f"[MiraiOS]     Tipo: {data_type}")
+
+
+def show_model_info(model_path: Path) -> int:
+    """Carrega e exibe metadados estruturais de um modelo ONNX."""
+    if error := get_model_path_error(model_path):
+        return print_error(error)
+
+    try:
+        onnx, model = load_onnx_model(model_path)
+    except MiraiRuntimeError as error:
+        return print_error(str(error))
+
+    print(f"[MiraiOS] Informações do modelo: {model_path.name}")
+    print_value_info_section("Entradas", model.graph.input, onnx)
+    print_value_info_section("Saídas", model.graph.output, onnx)
+    print(f"[MiraiOS] Total de nós/camadas: {len(model.graph.node)}")
     return 0
 
 
@@ -267,6 +350,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="caminho para o arquivo .onnx",
     )
 
+    info_parser = subparsers.add_parser(
+        "info",
+        help="exibe informações estruturais de um modelo ONNX",
+        description="Lista entradas, saídas e nós do grafo de um modelo ONNX.",
+    )
+    info_parser.add_argument(
+        "model_path",
+        type=Path,
+        metavar="ARQUIVO",
+        help="caminho para o arquivo .onnx",
+    )
+
     run_parser = subparsers.add_parser(
         "run",
         help="executa uma inferência com um modelo ONNX",
@@ -319,6 +414,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "validate":
         return validate_model(args.model_path)
+
+    if args.command == "info":
+        return show_model_info(args.model_path)
 
     if args.command == "run":
         return run_model(args.model_path, args.input_value)
