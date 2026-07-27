@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "miraios"
-version = "0.5.1"
-description = "CLI do MiraiOS — The Future Runs Local"
+version = "0.6.0"
+description = "Deploy e execução de modelos ONNX em dispositivos Edge AI"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
