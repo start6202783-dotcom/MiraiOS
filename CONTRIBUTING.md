@@ -1,25 +1,94 @@
-# 🤝 Guias de Contribuição do MiraiOS
+# Contribuindo com o MiraiOS
 
-Primeiramente, obrigado pelo interesse em contribuir com o **MiraiOS**! O objetivo do projeto é construir um framework enxuto, rápido e portátil para execução de Inteligência Artificial na borda (Edge AI).
+Obrigado por contribuir com o **MiraiOS** e o **Projeto Hikari**. Correções,
+testes, documentação e propostas para novos dispositivos são bem-vindos.
 
-Toda contribuição — seja corrigindo um bug, melhorando a documentação ou implementando novas funcionalidades no Projeto Hikari — é extremamente bem-vinda.
+## Antes de abrir uma issue
 
----
+Pesquise as issues existentes. Ao relatar um bug, inclua:
 
-## 🚀 Como posso contribuir?
+- comportamento esperado e comportamento observado;
+- passos e comandos para reproduzir;
+- sistema operacional e arquitetura;
+- versão do Python e do MiraiOS;
+- modelo mínimo ou metadados de entradas e saídas, quando possível.
 
-### 1. Reportando Bugs ou Sugerindo Funcionalidades
-Se você encontrou um problema ou tem uma ideia para o ecossistema:
-1. Verifique na aba **Issues** do repositório se a discussão já não foi aberta.
-2. Caso não exista, abra uma nova **Issue** detalhando:
-   - O comportamento esperado e o comportamento obtido.
-   - Passos para reproduzir o erro (com comandos executados).
-   - Seu ambiente (Sistema Operacional, versão do Python).
+Não publique modelos, dados ou credenciais confidenciais.
 
-### 2. Contribuindo com Código
+## Ambiente de desenvolvimento
 
-#### Fluxo de Trabalho:
-1. Faça um **Fork** deste repositório para sua conta pessoal.
-2. Crie uma nova *branch* para sua alteração:
-   ```bash
-   git checkout -b feat/nome-da-sua-feature
+Faça um fork, clone o repositório e crie uma branch:
+
+```bash
+git clone https://github.com/SEU_USUARIO/MiraiOS.git
+cd MiraiOS
+git switch -c feat/minha-funcionalidade
+```
+
+Crie um ambiente virtual e instale o projeto em modo editável:
+
+```bash
+python -m venv .venv
+python -m pip install --upgrade pip
+python -m pip install --editable ".[dev]"
+```
+
+Ative o ambiente antes da instalação quando necessário:
+
+```bash
+source .venv/bin/activate
+```
+
+No Windows PowerShell:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+## Validação local
+
+Antes de enviar sua alteração, execute:
+
+```bash
+python -m compileall -q src tests scripts
+python -m pytest
+```
+
+Teste também os fluxos afetados com o modelo de exemplo:
+
+```bash
+mirai validate examples/dummy_model.onnx
+mirai info examples/dummy_model.onnx
+mirai run examples/dummy_model.onnx --input 5
+mirai benchmark examples/dummy_model.onnx --runs 10 --warmup 2
+```
+
+## Padrões do projeto
+
+- Preserve compatibilidade com Python 3.10–3.13.
+- Mantenha mensagens de terminal objetivas e acionáveis.
+- Adicione testes para correções e novos comportamentos.
+- Não esconda limitações específicas de modelo ou hardware.
+- Prefira funções pequenas e módulos com responsabilidade clara.
+- Atualize README e CHANGELOG quando o comportamento público mudar.
+
+## Commits e Pull Requests
+
+Use mensagens de commit curtas e descritivas, por exemplo:
+
+```text
+fix: valida estrutura real de modelos ONNX
+feat: adiciona entradas nomeadas ao runtime
+test: cobre imagens NHWC e uint8
+```
+
+O Pull Request deve explicar:
+
+- o problema ou objetivo;
+- a solução adotada;
+- impacto para usuários e desenvolvedores;
+- limitações conhecidas;
+- comandos usados para validar.
+
+O CI executará a suíte em Python 3.10, 3.11, 3.12 e 3.13. Aguarde todos os
+checks antes de solicitar a revisão final.
