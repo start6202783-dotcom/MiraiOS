@@ -10,7 +10,7 @@ from time import perf_counter
 from typing import Any
 
 
-VERSION = "MiraiOS CLI v0.2.0 (Projeto Hikari)"
+VERSION = "MiraiOS CLI v0.3.0 (Projeto Hikari)"
 ONNX_EXTENSION = ".onnx"
 BYTES_PER_KB = 1024
 DEFAULT_INPUT_VALUE = 1.0
