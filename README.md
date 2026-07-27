@@ -1,16 +1,21 @@
-````markdown
 <div align="center">
 
 # 🚀 MiraiOS
 
 ### The Future Runs Local
 
-Framework enxuto para deploy e execução de modelos de IA em dispositivos de borda.
+Framework enxuto para validar, inspecionar e executar modelos de IA em
+dispositivos de borda.
 
-[![Status](https://img.shields.io/badge/status-em%20desenvolvimento-yellow)](#-status-do-projeto)
-[![Version](https://img.shields.io/badge/MVP-v0.1-blue)](#-roadmap)
-[![Project](https://img.shields.io/badge/projeto-Hikari-purple)](#-status-do-projeto)
-[![License](https://img.shields.io/badge/license-a%20definir-lightgrey)](#-licença)
+[![PyPI](https://img.shields.io/pypi/v/miraios.svg?color=blue&label=PyPI)](https://pypi.org/project/miraios/)
+[![Status](https://img.shields.io/badge/status-v0.5.0%20publicado-brightgreen)](#-status-do-projeto)
+[![Project](https://img.shields.io/badge/projeto-Hikari-purple)](#-projeto-hikari)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+
+[Instalação](#-instalação) •
+[Comandos](#-mirai-cli) •
+[Roadmap](#-roadmap) •
+[Contribuição](#-como-contribuir)
 
 </div>
 
@@ -18,285 +23,250 @@ Framework enxuto para deploy e execução de modelos de IA em dispositivos de bo
 
 ## 🌐 Sobre
 
-O **MiraiOS** é um framework open-source criado para simplificar o deploy e a execução de modelos de Inteligência Artificial em dispositivos de borda — **Edge AI**.
+O **MiraiOS** é um framework open-source criado para simplificar a validação,
+a inspeção, a execução e o benchmark de modelos de Inteligência Artificial em
+dispositivos de borda — **Edge AI**.
 
-Seu objetivo é conectar modelos no formato **ONNX** ao hardware local de maneira rápida, eficiente e com o mínimo de complexidade operacional.
+Seu objetivo é conectar modelos no formato **ONNX** ao hardware local de forma
+rápida, eficiente e com o mínimo de complexidade operacional.
 
 > Execute IA onde os dados são gerados.
 
 Ao reduzir a dependência da nuvem, o MiraiOS busca viabilizar aplicações com:
 
-- ⚡ Menor latência
-- 🔒 Maior privacidade
-- 📡 Operação offline
-- 💰 Menor custo de infraestrutura
-- 🧩 Integração simplificada entre modelos e hardware
-- 🌱 Uso eficiente de recursos computacionais
+- ⚡ menor latência;
+- 🔒 maior privacidade;
+- 📡 operação offline;
+- 💰 menor custo de infraestrutura;
+- 🧩 integração simplificada entre modelos e hardware;
+- 🌱 uso eficiente dos recursos computacionais.
 
 ---
 
 ## ✨ Visão
 
-Construir uma camada enxuta, portátil e extensível para tornar a execução local de modelos de IA mais acessível em diferentes dispositivos e arquiteturas.
+Construir uma camada enxuta, portátil e extensível para tornar a execução local
+de modelos de IA mais acessível em diferentes dispositivos e arquiteturas.
 
-O MiraiOS pretende oferecer uma experiência unificada desde a preparação do modelo até sua execução no hardware de destino.
-
-```bash
-Model ONNX → Mirai CLI → Mirai Runtime → Edge Device
-````
+O MiraiOS oferece uma experiência unificada para inspecionar tensores, validar
+modelos, executar inferências e medir o desempenho do hardware local.
 
 ---
 
 ## 🚧 Status do projeto
 
-O MiraiOS está atualmente em **desenvolvimento inicial**.
+O MVP do MiraiOS está ativo e disponível como pacote Python.
 
-| Item                | Estado                |
-| ------------------- | --------------------- |
-| Projeto             | Hikari                |
-| Fase                | MVP                   |
-| Versão planejada    | v0.1                  |
-| Status              | 🟡 Em desenvolvimento |
-| Estabilidade da API | Sujeita a alterações  |
+| Item | Estado |
+| --- | --- |
+| Projeto | Hikari |
+| Fase | MVP |
+| Versão atual | v0.5.0 |
+| Distribuição | 🟢 Publicado no PyPI |
+| Licença | MIT |
 
-> ⚠️ O projeto ainda não está pronto para uso em produção. APIs, comandos e decisões arquiteturais poderão mudar durante o desenvolvimento do MVP.
+> O projeto continua em evolução. A interface da CLI e as funcionalidades do
+> runtime podem receber ajustes entre versões do MVP.
 
 ---
 
 ## 🏗️ Arquitetura
 
-A arquitetura futura do MiraiOS será composta por módulos independentes e integráveis.
+O fluxo atual do MiraiOS conecta a interface de linha de comando, o runtime
+local, os modelos ONNX e o hardware de destino.
 
-```text
-┌───────────────────────────────────────┐
-│               Mirai CLI               │
-│  Configuração • Build • Deploy • Logs │
-└───────────────────┬───────────────────┘
-                    │
-                    ▼
-┌───────────────────────────────────────┐
-│             Mirai Runtime             │
-│ Carregamento • Inferência • Otimização│
-└───────────────────┬───────────────────┘
-                    │
-                    ▼
-┌───────────────────────────────────────┐
-│              ONNX Models              │
-└───────────────────┬───────────────────┘
-                    │
-                    ▼
-┌───────────────────────────────────────┐
-│             Edge Hardware             │
-│     x86_64 • ARM • Futuro RISC-V      │
-└───────────────────────────────────────┘
+```mermaid
+flowchart TD
+    CLI["Mirai CLI<br/>validate · info · run · benchmark"]
+    MODELS["Modelos ONNX"]
+    RUNTIME["Mirai Runtime<br/>carregamento · pré-processamento · inferência"]
+    HARDWARE["Hardware local<br/>x86_64 · ARM · RISC-V (roadmap)"]
+
+    CLI --> RUNTIME
+    MODELS --> RUNTIME
+    RUNTIME --> HARDWARE
 ```
 
 ### 🧰 Mirai CLI
 
-Interface de linha de comando planejada para gerenciar o ciclo de vida das aplicações MiraiOS.
+A CLI concentra as operações essenciais do ciclo local de um modelo:
 
-Responsabilidades previstas:
+| Comando | Descrição |
+| --- | --- |
+| `mirai init` | Inicializa o ambiente local do Projeto Hikari. |
+| `mirai validate modelo.onnx` | Verifica a existência e a extensão do modelo. |
+| `mirai info modelo.onnx` | Exibe entradas, saídas, shapes, tipos e nós do grafo. |
+| `mirai run modelo.onnx --input 5.0` | Executa uma inferência com entrada numérica. |
+| `mirai run modelo.onnx --input foto.png` | Executa uma inferência com imagem compatível. |
+| `mirai benchmark modelo.onnx --runs 50` | Mede latência e inferências por segundo. |
 
-* Inicializar projetos
-* Validar modelos ONNX
-* Configurar dispositivos
-* Preparar builds
-* Realizar deploy local
-* Inspecionar logs e métricas
+---
 
-Exemplo conceitual:
+## 🚀 Instalação
+
+Recomenda-se utilizar um ambiente virtual:
 
 ```bash
-mirai init my-edge-app
-mirai model add model.onnx
-mirai build
-mirai deploy --device local
+python -m venv .venv
 ```
 
-> Os comandos apresentados são conceituais e poderão mudar durante o desenvolvimento.
+Ative o ambiente no Linux ou macOS:
 
-### ⚙️ Mirai Runtime
+```bash
+source .venv/bin/activate
+```
 
-Camada responsável por executar os modelos de IA no hardware de destino.
+No Windows PowerShell:
 
-Responsabilidades previstas:
+```powershell
+.venv\Scripts\Activate.ps1
+```
 
-* Carregamento de modelos ONNX
-* Gerenciamento de sessões de inferência
-* Seleção de provedores de execução
-* Otimização de recursos
-* Abstração das diferenças entre plataformas
-* Monitoramento de desempenho local
+Instale ou atualize o MiraiOS pelo PyPI:
 
-### 🧠 ONNX
+```bash
+python -m pip install --upgrade miraios
+```
 
-O formato ONNX será utilizado como interface portátil entre modelos treinados em diferentes frameworks e o runtime local.
+Confirme a instalação:
 
-Isso permitirá integrar modelos exportados por ferramentas como:
+```bash
+mirai --version
+```
 
-* PyTorch
-* TensorFlow
-* scikit-learn
-* Outros frameworks compatíveis com ONNX
+---
 
-### 🧬 Suporte a RISC-V
+## ⚡ Uso rápido
 
-O suporte a arquiteturas **RISC-V** faz parte da visão futura do projeto.
+### Inspecionar um modelo
 
-A proposta é preparar o MiraiOS para uma nova geração de dispositivos abertos, eficientes e especializados em cargas de trabalho de IA na borda.
+```bash
+mirai info seu_modelo.onnx
+```
+
+O comando apresenta as entradas e saídas do modelo, incluindo nomes, shapes,
+tipos de dados e o número total de nós no grafo computacional.
+
+### Validar um arquivo ONNX
+
+```bash
+mirai validate seu_modelo.onnx
+```
+
+### Executar uma inferência numérica
+
+```bash
+mirai run seu_modelo.onnx --input 5.0
+```
+
+### Executar uma inferência com imagem
+
+Para modelos compatíveis com entrada de imagem:
+
+```bash
+mirai run seu_modelo.onnx --input foto.jpg
+```
+
+### Medir o desempenho local
+
+```bash
+mirai benchmark seu_modelo.onnx --runs 100
+```
+
+O benchmark informa:
+
+- tempo total de execução;
+- latência média por inferência;
+- estimativa de inferências por segundo (FPS/IPS).
 
 ---
 
 ## 🗺️ Roadmap
 
-### Projeto Hikari — MVP v0.1
+### Projeto Hikari — MVP v0.5.0
 
-* [ ] Definir a arquitetura inicial
-* [ ] Criar a estrutura base do repositório
-* [ ] Implementar o carregamento de modelos ONNX
-* [ ] Executar inferência em hardware local
-* [ ] Criar a primeira versão do Mirai Runtime
-* [ ] Criar comandos essenciais do Mirai CLI
-* [ ] Adicionar configuração por arquivo
-* [ ] Implementar logs básicos
-* [ ] Publicar exemplos mínimos
-* [ ] Documentar instalação e primeiros passos
+- [x] Definir a arquitetura inicial.
+- [x] Criar a estrutura base do pacote em `src/mirai`.
+- [x] Validar arquivos e extensões `.onnx`.
+- [x] Inspecionar entradas, saídas e nós com `mirai info`.
+- [x] Executar inferências locais com `mirai run`.
+- [x] Adicionar pré-processamento de imagens `.jpg` e `.png`.
+- [x] Medir latência e vazão com `mirai benchmark`.
+- [x] Publicar o pacote no PyPI.
 
 ### Próximas versões
 
-* [ ] Suporte a múltiplos provedores de execução
-* [ ] Detecção automática de hardware
-* [ ] Benchmark de inferência
-* [ ] Quantização e otimização de modelos
-* [ ] Gerenciamento de dispositivos
-* [ ] Métricas de CPU, memória e latência
-* [ ] Suporte aprimorado a ARM
-* [ ] Suporte experimental a RISC-V
-* [ ] Empacotamento de aplicações Edge AI
-* [ ] Sistema de plugins e extensões
-
-> O roadmap é preliminar e poderá evoluir conforme as decisões técnicas e contribuições da comunidade.
+- [ ] Adicionar aceleração por GPU com CUDA e DirectML.
+- [ ] Exportar relatórios de benchmark em JSON.
+- [ ] Detectar automaticamente o hardware local.
+- [ ] Ampliar a compatibilidade com ARM.
+- [ ] Adicionar suporte experimental a RISC-V.
 
 ---
 
-## 🚀 Primeiros passos
-
-O processo de instalação ainda está sendo definido.
-
-Quando o MVP estiver disponível, esta seção incluirá:
-
-1. Requisitos do ambiente
-2. Instalação do Mirai CLI
-3. Configuração do dispositivo
-4. Importação de um modelo ONNX
-5. Execução da primeira inferência
-
-Enquanto isso, acompanhe o desenvolvimento pelo roadmap e pelas issues do repositório.
-
----
-
-## 📁 Estrutura planejada
+## 📁 Estrutura do projeto
 
 ```text
 MiraiOS/
-├── cli/                 # Mirai CLI
-├── runtime/             # Mirai Runtime
-├── examples/            # Exemplos de Edge AI
-├── docs/                # Documentação técnica
-├── tests/               # Testes automatizados
-├── scripts/             # Scripts de desenvolvimento
-├── CONTRIBUTING.md      # Guia de contribuição
-├── LICENSE              # Licença do projeto
-└── README.md            # Visão geral
+├── src/
+│   └── mirai/
+│       ├── __init__.py
+│       └── main.py          # CLI e runtime
+├── scripts/
+│   └── create_dummy_model.py
+├── examples/
+│   └── dummy_model.onnx
+├── tests/                   # Testes automatizados
+├── pyproject.toml           # Metadados, dependências e entry point
+├── LICENSE                  # Licença MIT
+└── README.md                # Visão geral e documentação
 ```
 
 ---
 
 ## 🤝 Como contribuir
 
-Contribuições são bem-vindas, especialmente nesta fase inicial do projeto.
-
-Você pode colaborar de diferentes formas:
-
-* Reportando bugs
-* Sugerindo funcionalidades
-* Melhorando a documentação
-* Criando exemplos
-* Discutindo decisões arquiteturais
-* Implementando funcionalidades
-* Adicionando testes
-* Avaliando compatibilidade com novos dispositivos
-
-### Fluxo recomendado
+Contribuições são bem-vindas:
 
 1. Faça um fork do repositório.
-
-2. Crie uma branch para sua alteração:
+2. Crie uma branch para a alteração:
 
    ```bash
-   git checkout -b feat/minha-contribuicao
+   git checkout -b feat/minha-funcionalidade
    ```
 
-3. Implemente e teste suas mudanças.
-
-4. Crie um commit claro:
+3. Implemente e teste sua mudança.
+4. Registre um commit objetivo:
 
    ```bash
    git commit -m "feat: adiciona nova funcionalidade"
    ```
 
-5. Envie a branch para seu fork:
+5. Envie a branch:
 
    ```bash
-   git push origin feat/minha-contribuicao
+   git push origin feat/minha-funcionalidade
    ```
 
-6. Abra um Pull Request descrevendo:
+6. Abra um Pull Request explicando o problema, a solução e como validar a
+   alteração.
 
-   * O problema resolvido
-   * A solução implementada
-   * Como validar a mudança
-   * Possíveis limitações
-
-Antes de contribuir, consulte o arquivo `CONTRIBUTING.md` quando ele estiver disponível.
-
----
-
-## 💬 Comunidade
-
-O MiraiOS está no início, e este é o melhor momento para participar de sua construção.
-
-Use as **Issues** para:
-
-* Relatar problemas
-* Propor funcionalidades
-* Compartilhar casos de uso
-* Discutir arquitetura
-* Sugerir suporte a novos dispositivos
-
-Use as **Discussions** para conversas mais amplas sobre Edge AI, ONNX, RISC-V e o futuro da computação local.
-
----
-
-## 🔐 Segurança
-
-Caso encontre uma vulnerabilidade, evite publicá-la diretamente em uma issue pública.
-
-Uma política de divulgação responsável e um canal de contato de segurança serão disponibilizados em versões futuras.
+Você também pode contribuir relatando bugs, sugerindo funcionalidades,
+melhorando a documentação ou adicionando suporte a novos dispositivos.
 
 ---
 
 ## 📄 Licença
 
-A licença open-source do MiraiOS ainda será definida.
-
-Antes de reutilizar ou distribuir o código, consulte o arquivo `LICENSE` e as informações atualizadas deste repositório.
+Distribuído sob a licença **MIT**. Consulte o arquivo [LICENSE](LICENSE) para
+mais informações.
 
 ---
 
 ## 🌅 Projeto Hikari
 
-**Hikari** representa a primeira etapa do MiraiOS: um MVP focado em validar os fundamentos do framework e sua integração entre modelos ONNX e hardware local.
+**Hikari** representa a primeira etapa do MiraiOS: um MVP focado em validar os
+fundamentos do framework e sua integração entre modelos ONNX e hardware local.
 
 > Pequeno no runtime. Grande no futuro.
 
@@ -309,4 +279,3 @@ Antes de reutilizar ou distribuir o código, consulte o arquivo `LICENSE` e as i
 Feito para levar a Inteligência Artificial além da nuvem. 🚀
 
 </div>
-```
