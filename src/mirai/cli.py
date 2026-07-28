@@ -9,7 +9,14 @@ from pathlib import Path
 
 from . import __version__
 from .agent import run_agent
-from .agent_client import deploy_model, get_agent_info, get_agent_logs
+from .agent_client import (
+    activate_deployment,
+    deploy_model,
+    get_agent_info,
+    get_agent_logs,
+    get_deployment_status,
+    run_remote_model,
+)
 from .benchmark import (
     DEFAULT_BENCHMARK_RUNS,
     DEFAULT_WARMUP_RUNS,
@@ -111,9 +118,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser(
         "run",
-        help="executa uma inferência local",
+        help="executa uma inferência local ou no Mirai Agent",
     )
-    run_parser.add_argument("model_path", type=Path, metavar="ARQUIVO")
+    run_parser.add_argument(
+        "model_path",
+        type=Path,
+        nargs="?",
+        metavar="ARQUIVO",
+        help="modelo local ou nome esperado do deployment ativo",
+    )
+    run_parser.add_argument(
+        "--device",
+        dest="device_name",
+        metavar="NOME",
+        help="executa no deployment ativo de um dispositivo cadastrado",
+    )
     _add_input_arguments(run_parser)
 
     benchmark_parser = subparsers.add_parser(
@@ -193,6 +212,29 @@ def build_parser() -> argparse.ArgumentParser:
         dest="device_name",
         metavar="NOME",
         help="dispositivo cadastrado com 'mirai device add'",
+    )
+
+    activate_parser = subparsers.add_parser(
+        "activate",
+        help="ativa um deployment validado no dispositivo",
+    )
+    activate_parser.add_argument("deployment_id", metavar="DEPLOYMENT")
+    activate_parser.add_argument(
+        "--device",
+        required=True,
+        dest="device_name",
+        metavar="NOME",
+    )
+
+    status_parser = subparsers.add_parser(
+        "status",
+        help="exibe deployments e o modelo ativo de um dispositivo",
+    )
+    status_parser.add_argument(
+        "--device",
+        required=True,
+        dest="device_name",
+        metavar="NOME",
     )
 
     logs_parser = subparsers.add_parser(
@@ -277,6 +319,42 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.command == "run":
+            if args.device_name:
+                device = get_device(args.device_name)
+                model_name = (
+                    args.model_path.name if args.model_path is not None else None
+                )
+                print(
+                    f"[MiraiOS] Executando no dispositivo: {device.name}"
+                )
+                inference = run_remote_model(
+                    device,
+                    args.input_specs,
+                    args.layout,
+                    model_name,
+                )
+                print(
+                    "[MiraiOS] Deployment: "
+                    f"{inference['deployment_id']}"
+                )
+                print(
+                    "[MiraiOS] Resultado da inferência: "
+                    f"{inference['result']}"
+                )
+                print(
+                    "[MiraiOS] Latência remota: "
+                    f"{inference['latency_ms']:.2f} ms"
+                )
+                print(
+                    "[MiraiOS] Tempo total no Agent: "
+                    f"{inference['total_ms']:.2f} ms"
+                )
+                return 0
+
+            if args.model_path is None:
+                raise MiraiRuntimeError(
+                    "informe ARQUIVO para execução local ou use --device"
+                )
             print(f"[MiraiOS] Carregando modelo: {args.model_path.name}")
             result, elapsed_ms = run_model(
                 args.model_path,
@@ -370,6 +448,38 @@ def main(argv: Sequence[str] | None = None) -> int:
             providers = deployment.get("providers") or []
             if providers:
                 print(f"[MiraiOS] Providers: {', '.join(providers)}")
+            return 0
+
+        if args.command == "activate":
+            device = get_device(args.device_name)
+            deployment = activate_deployment(
+                device,
+                args.deployment_id,
+            )
+            print(
+                "[MiraiOS] Deployment ativo: "
+                f"{deployment['deployment_id']} ({deployment['model']})"
+            )
+            return 0
+
+        if args.command == "status":
+            device = get_device(args.device_name)
+            status = get_deployment_status(device)
+            deployments = status["deployments"]
+            active_id = status.get("active_deployment_id")
+            print(f"[MiraiOS] Status do dispositivo: {device.name}")
+            if not deployments:
+                print("[MiraiOS] Nenhum deployment encontrado.")
+                return 0
+            for deployment in deployments:
+                marker = "●" if deployment["deployment_id"] == active_id else "○"
+                providers = ", ".join(deployment.get("providers") or [])
+                provider_suffix = f" | {providers}" if providers else ""
+                print(
+                    f"{marker} {deployment['deployment_id']} | "
+                    f"{deployment['model']} | {deployment['status']}"
+                    f"{provider_suffix}"
+                )
             return 0
 
         if args.command == "logs":

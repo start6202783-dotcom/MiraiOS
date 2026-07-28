@@ -5,6 +5,29 @@ Todas as mudanças relevantes do MiraiOS serão documentadas neste arquivo.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e
 o projeto utiliza [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.7.0] - 2026-07-28
+
+### Adicionado
+
+- lifecycle persistente de deployments com estados `ready` e `active`;
+- endpoint para listar deployments e identificar o modelo ativo;
+- ativação explícita com `mirai activate`;
+- visualização do lifecycle com `mirai status`;
+- inferência no Agent com `mirai run --device`;
+- retorno de resultado, latência de inferência e tempo total no destino;
+- eventos de ativação, sucesso e falha de inferência;
+- inventário de CPU e memória para futura orquestração;
+- identidade visual oficial e demonstração animada no README.
+
+### Segurança
+
+- corpos JSON de inferência são limitados a 1 MB;
+- entradas remotas são validadas antes de chegar ao runtime;
+- caminhos de imagens remotas são rejeitados para impedir leitura de arquivos
+  arbitrários no Agent;
+- a API continua restrita a desenvolvimento local até a implementação de
+  pareamento e autenticação.
+
 ## [0.6.0] - 2026-07-27
 
 ### Adicionado
@@ -67,3 +90,4 @@ o projeto utiliza [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 [0.5.1]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/start6202783-dotcom/MiraiOS/releases/tag/v0.5.0
 [0.6.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.5.1...v0.6.0
+[0.7.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.6.0...v0.7.0
