@@ -5,13 +5,24 @@ from __future__ import annotations
 import hashlib
 import http.client
 import json
+import secrets
+import ssl
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
-from .devices import Device
+from . import __version__
+from .devices import (
+    Device,
+    add_device,
+    is_loopback_agent_url,
+    load_devices,
+    normalize_agent_url,
+    normalize_device_name,
+)
 from .errors import MiraiRuntimeError
 from .inspect import ensure_model_path, validate_model
+from .security import normalize_fingerprint
 
 
 DEFAULT_AGENT_TIMEOUT = 15.0
@@ -19,17 +30,56 @@ DEFAULT_AGENT_TIMEOUT = 15.0
 
 def _connection(device: Device) -> tuple[http.client.HTTPConnection, str]:
     parsed = urlsplit(device.url)
-    connection_class: type[http.client.HTTPConnection]
-    connection_class = (
-        http.client.HTTPSConnection
-        if parsed.scheme == "https"
-        else http.client.HTTPConnection
-    )
-    connection = connection_class(
-        parsed.hostname,
-        parsed.port,
-        timeout=DEFAULT_AGENT_TIMEOUT,
-    )
+    if parsed.scheme == "https":
+        if not device.tls_fingerprint:
+            raise MiraiRuntimeError(
+                f"dispositivo '{device.name}' não possui fingerprint TLS"
+            )
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        connection = http.client.HTTPSConnection(
+            parsed.hostname,
+            parsed.port,
+            timeout=DEFAULT_AGENT_TIMEOUT,
+            context=context,
+        )
+        try:
+            connection.connect()
+            if connection.sock is None:
+                raise MiraiRuntimeError(
+                    f"Agent '{device.name}' não abriu um canal TLS"
+                )
+            certificate = connection.sock.getpeercert(binary_form=True)
+        except (OSError, ssl.SSLError, http.client.HTTPException) as error:
+            connection.close()
+            raise MiraiRuntimeError(
+                f"falha no canal TLS com o Agent '{device.name}'"
+            ) from error
+        actual_fingerprint = hashlib.sha256(certificate).hexdigest()
+        expected_fingerprint = normalize_fingerprint(
+            device.tls_fingerprint
+        )
+        if not secrets.compare_digest(
+            actual_fingerprint,
+            expected_fingerprint,
+        ):
+            connection.close()
+            raise MiraiRuntimeError(
+                f"fingerprint TLS do Agent '{device.name}' não confere"
+            )
+    else:
+        if device.token or not is_loopback_agent_url(device.url):
+            raise MiraiRuntimeError(
+                "credenciais nunca podem ser enviadas por HTTP; "
+                "use HTTPS com pareamento"
+            )
+        connection = http.client.HTTPConnection(
+            parsed.hostname,
+            parsed.port,
+            timeout=DEFAULT_AGENT_TIMEOUT,
+        )
     return connection, parsed.path.rstrip("/")
 
 
@@ -61,16 +111,20 @@ def request_json(
     *,
     method: str = "GET",
     payload: dict[str, Any] | None = None,
+    authenticate: bool = True,
 ) -> dict[str, Any]:
     """Executa uma requisição JSON simples contra o Agent."""
-    connection, prefix = _connection(device)
+    connection: http.client.HTTPConnection | None = None
     body = None
     headers = {"Accept": "application/json"}
     if payload is not None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json; charset=utf-8"
         headers["Content-Length"] = str(len(body))
+    if authenticate and device.token:
+        headers["Authorization"] = f"Bearer {device.token}"
     try:
+        connection, prefix = _connection(device)
         connection.request(
             method,
             f"{prefix}{path}",
@@ -83,7 +137,118 @@ def request_json(
             f"não foi possível conectar ao Agent '{device.name}' em {device.url}"
         ) from error
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
+
+
+def get_agent_health(device: Device) -> dict[str, Any]:
+    """Consulta o endpoint público usando o canal esperado do dispositivo."""
+    return request_json(
+        device,
+        "/v1/health",
+        authenticate=False,
+    )
+
+
+def pair_device(
+    name: str,
+    url: str,
+    code: str,
+    fingerprint: str,
+    *,
+    replace: bool = False,
+) -> tuple[Device, dict[str, Any]]:
+    """Pareia a CLI após fixar o certificado informado fora de banda."""
+    normalized_name = normalize_device_name(name)
+    normalized_url = normalize_agent_url(url)
+    if normalized_name in load_devices() and not replace:
+        raise MiraiRuntimeError(
+            f"dispositivo '{normalized_name}' já está cadastrado; "
+            "use --replace para substituir"
+        )
+    if urlsplit(normalized_url).scheme != "https":
+        raise MiraiRuntimeError("pareamento exige uma URL HTTPS")
+    expected_fingerprint = normalize_fingerprint(fingerprint)
+    provisional = Device(
+        name=normalized_name,
+        url=normalized_url,
+        tls_fingerprint=expected_fingerprint,
+    )
+    pairing = request_json(
+        provisional,
+        "/v1/pair",
+        method="POST",
+        payload={
+            "name": normalized_name,
+            "code": code,
+        },
+        authenticate=False,
+    )
+    required = {
+        "token": pairing.get("token"),
+        "fingerprint": pairing.get("fingerprint"),
+        "agent_id": pairing.get("agent_id"),
+        "client_id": pairing.get("client_id"),
+    }
+    if not all(isinstance(value, str) and value for value in required.values()):
+        raise MiraiRuntimeError(
+            f"Agent '{normalized_name}' retornou credenciais inválidas"
+        )
+    returned_fingerprint = normalize_fingerprint(
+        str(required["fingerprint"])
+    )
+    if not secrets.compare_digest(
+        returned_fingerprint,
+        expected_fingerprint,
+    ):
+        raise MiraiRuntimeError(
+            f"Agent '{normalized_name}' retornou outra identidade TLS"
+        )
+    device = add_device(
+        normalized_name,
+        normalized_url,
+        replace=replace,
+        token=str(required["token"]),
+        tls_fingerprint=returned_fingerprint,
+        agent_id=str(required["agent_id"]),
+        client_id=str(required["client_id"]),
+    )
+    return device, pairing
+
+
+def revoke_remote_device(device: Device) -> dict[str, Any]:
+    """Revoga no Agent as credenciais usadas pela CLI atual."""
+    if not device.paired:
+        raise MiraiRuntimeError(
+            f"dispositivo '{device.name}' não utiliza pareamento"
+        )
+    return request_json(
+        device,
+        "/v1/clients/self",
+        method="DELETE",
+    )
+
+
+def doctor_device(device: Device) -> dict[str, Any]:
+    """Executa os diagnósticos essenciais do canal e do runtime."""
+    health = get_agent_health(device)
+    info = get_agent_info(device)
+    deployments = get_deployment_status(device)
+    agent_version = str(health.get("agent_version", ""))
+    client_series = ".".join(__version__.split(".")[:2])
+    agent_series = ".".join(agent_version.split(".")[:2])
+    return {
+        "health": health,
+        "info": info,
+        "deployments": deployments,
+        "tls": urlsplit(device.url).scheme == "https",
+        "authenticated": device.paired,
+        "compatible": bool(
+            client_series
+            and agent_series
+            and client_series == agent_series
+        ),
+    }
 
 
 def get_agent_info(device: Device) -> dict[str, Any]:
@@ -162,7 +327,7 @@ def deploy_model(device: Device, model_path: Path) -> dict[str, Any]:
     validate_model(model_path)
     model_size = model_path.stat().st_size
     model_sha256 = calculate_sha256(model_path)
-    connection, prefix = _connection(device)
+    connection: http.client.HTTPConnection | None = None
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/octet-stream",
@@ -170,8 +335,11 @@ def deploy_model(device: Device, model_path: Path) -> dict[str, Any]:
         "X-Mirai-Model-Name": model_path.name,
         "X-Mirai-SHA256": model_sha256,
     }
+    if device.token:
+        headers["Authorization"] = f"Bearer {device.token}"
 
     try:
+        connection, prefix = _connection(device)
         with model_path.open("rb") as model_file:
             connection.request(
                 "POST",
@@ -185,4 +353,5 @@ def deploy_model(device: Device, model_path: Path) -> dict[str, Any]:
             f"falha ao enviar o modelo para o Agent '{device.name}'"
         ) from error
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()

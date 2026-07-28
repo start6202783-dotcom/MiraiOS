@@ -6,13 +6,19 @@ import json
 import os
 import re
 from dataclasses import asdict, dataclass
+from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from .errors import MiraiRuntimeError
+from .security import normalize_fingerprint
 
 
 DEVICE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,256}$")
+AGENT_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+CLIENT_ID_PATTERN = re.compile(r"^[0-9a-f]{16}$")
+DEVICE_REGISTRY_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +27,15 @@ class Device:
 
     name: str
     url: str
+    token: str | None = None
+    tls_fingerprint: str | None = None
+    agent_id: str | None = None
+    client_id: str | None = None
+
+    @property
+    def paired(self) -> bool:
+        """Informa se o dispositivo possui credenciais do Hikari Link."""
+        return bool(self.token and self.tls_fingerprint)
 
 
 def mirai_home() -> Path:
@@ -70,6 +85,64 @@ def normalize_agent_url(url: str) -> str:
     return urlunsplit((parsed.scheme, netloc, "", "", ""))
 
 
+def is_loopback_agent_url(url: str) -> bool:
+    """Informa se uma URL aponta apenas para a máquina local."""
+    parsed = urlsplit(normalize_agent_url(url))
+    hostname = (parsed.hostname or "").lower()
+    if hostname == "localhost":
+        return True
+    try:
+        return ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _normalize_optional_credentials(
+    *,
+    url: str,
+    token: str | None,
+    tls_fingerprint: str | None,
+    agent_id: str | None,
+    client_id: str | None,
+    allow_legacy_unpaired: bool = False,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    provided = (token, tls_fingerprint, agent_id, client_id)
+    if not any(value is not None for value in provided):
+        if allow_legacy_unpaired:
+            return None, None, None, None
+        if not is_loopback_agent_url(url):
+            raise MiraiRuntimeError(
+                "Agents fora de localhost exigem pareamento; "
+                "use 'mirai device pair'"
+            )
+        if urlsplit(url).scheme == "https":
+            raise MiraiRuntimeError(
+                "uma URL HTTPS exige fingerprint e credenciais de pareamento"
+            )
+        return None, None, None, None
+
+    if not all(isinstance(value, str) and value for value in provided):
+        raise MiraiRuntimeError(
+            "credenciais do dispositivo estão incompletas"
+        )
+    assert token is not None
+    assert tls_fingerprint is not None
+    assert agent_id is not None
+    assert client_id is not None
+    if urlsplit(url).scheme != "https":
+        raise MiraiRuntimeError(
+            "credenciais de pareamento só podem ser usadas com HTTPS"
+        )
+    if not TOKEN_PATTERN.fullmatch(token):
+        raise MiraiRuntimeError("token do dispositivo possui formato inválido")
+    normalized_fingerprint = normalize_fingerprint(tls_fingerprint)
+    if not AGENT_ID_PATTERN.fullmatch(agent_id):
+        raise MiraiRuntimeError("identidade do Agent possui formato inválido")
+    if not CLIENT_ID_PATTERN.fullmatch(client_id):
+        raise MiraiRuntimeError("identidade do cliente possui formato inválido")
+    return token, normalized_fingerprint, agent_id, client_id
+
+
 def load_devices(path: Path | None = None) -> dict[str, Device]:
     """Carrega o registro, retornando um dicionário indexado pelo nome."""
     registry_path = path or device_registry_path()
@@ -83,7 +156,10 @@ def load_devices(path: Path | None = None) -> dict[str, Device]:
             f"não foi possível ler o registro de dispositivos: {error}"
         ) from error
 
-    if not isinstance(raw_data, dict) or raw_data.get("version") != 1:
+    if (
+        not isinstance(raw_data, dict)
+        or raw_data.get("version") not in {1, DEVICE_REGISTRY_VERSION}
+    ):
         raise MiraiRuntimeError("registro de dispositivos possui formato incompatível")
 
     raw_devices = raw_data.get("devices")
@@ -91,12 +167,28 @@ def load_devices(path: Path | None = None) -> dict[str, Device]:
         raise MiraiRuntimeError("registro de dispositivos está corrompido")
 
     devices: dict[str, Device] = {}
+    legacy_registry = raw_data.get("version") == 1
     try:
         for item in raw_devices:
             name = normalize_device_name(item["name"])
+            url = normalize_agent_url(item["url"])
+            token, fingerprint, agent_id, client_id = (
+                _normalize_optional_credentials(
+                    url=url,
+                    token=item.get("token"),
+                    tls_fingerprint=item.get("tls_fingerprint"),
+                    agent_id=item.get("agent_id"),
+                    client_id=item.get("client_id"),
+                    allow_legacy_unpaired=legacy_registry,
+                )
+            )
             devices[name] = Device(
                 name=name,
-                url=normalize_agent_url(item["url"]),
+                url=url,
+                token=token,
+                tls_fingerprint=fingerprint,
+                agent_id=agent_id,
+                client_id=client_id,
             )
     except (KeyError, TypeError, MiraiRuntimeError) as error:
         raise MiraiRuntimeError("registro de dispositivos está corrompido") from error
@@ -111,20 +203,30 @@ def save_devices(
     registry_path = path or device_registry_path()
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "version": 1,
+        "version": DEVICE_REGISTRY_VERSION,
         "devices": [
             asdict(device)
             for device in sorted(devices.values(), key=lambda item: item.name)
         ],
     }
-    temporary_path = registry_path.with_suffix(".tmp")
+    temporary_path = registry_path.with_name(f".{registry_path.name}.tmp")
     try:
-        temporary_path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
+        descriptor = os.open(
+            temporary_path,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            0o600,
         )
-        temporary_path.replace(registry_path)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as registry_file:
+            registry_file.write(
+                json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+            )
+        os.replace(temporary_path, registry_path)
+        try:
+            os.chmod(registry_path, 0o600)
+        except OSError:
+            pass
     except OSError as error:
+        temporary_path.unlink(missing_ok=True)
         raise MiraiRuntimeError(
             f"não foi possível salvar o registro de dispositivos: {error}"
         ) from error
@@ -136,12 +238,33 @@ def add_device(
     *,
     replace: bool = False,
     path: Path | None = None,
+    token: str | None = None,
+    tls_fingerprint: str | None = None,
+    agent_id: str | None = None,
+    client_id: str | None = None,
 ) -> Device:
     """Adiciona um Agent ao registro local."""
     normalized_name = normalize_device_name(name)
+    normalized_url = normalize_agent_url(url)
+    (
+        normalized_token,
+        normalized_fingerprint,
+        normalized_agent_id,
+        normalized_client_id,
+    ) = _normalize_optional_credentials(
+        url=normalized_url,
+        token=token,
+        tls_fingerprint=tls_fingerprint,
+        agent_id=agent_id,
+        client_id=client_id,
+    )
     device = Device(
         name=normalized_name,
-        url=normalize_agent_url(url),
+        url=normalized_url,
+        token=normalized_token,
+        tls_fingerprint=normalized_fingerprint,
+        agent_id=normalized_agent_id,
+        client_id=normalized_client_id,
     )
     devices = load_devices(path)
     if normalized_name in devices and not replace:

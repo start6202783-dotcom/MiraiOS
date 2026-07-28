@@ -14,7 +14,8 @@
 em dispositivos Edge.**
 
 [Começar](#comece-em-3-minutos) ·
-[Demonstração](#o-fluxo-da-v07) ·
+[Parear](#conecte-um-dispositivo-na-rede) ·
+[Demonstração](#o-fluxo-da-v08) ·
 [Arquitetura](#arquitetura) ·
 [CLI](#comandos) ·
 [Roadmap](#roadmap)
@@ -23,80 +24,86 @@ em dispositivos Edge.**
 
 ## O que é o MiraiOS?
 
-O **MiraiOS** é um projeto open-source do **Projeto Hikari** que conecta
-modelos ONNX a dispositivos Linux por um fluxo simples e reproduzível:
+O **MiraiOS** é um projeto open-source do **Projeto Hikari** que transforma um
+modelo ONNX em um serviço de inferência operável em Linux:
 
 ```text
-modelo → deploy → validação → ativação → inferência → resultado + métricas
+pareamento → deploy → validação → ativação → inferência → métricas
 ```
 
 A CLI permanece no computador do desenvolvedor. O **Mirai Agent** roda no
-destino, verifica o modelo, mantém o lifecycle dos deployments e executa a
+destino, mantém sua própria identidade, verifica o modelo e executa a
 inferência. O primeiro destino pode ser o próprio computador ou um container;
-o protocolo foi separado do hardware para evoluir depois para ARM64 e placas
-Edge sem exigir uma Raspberry Pi durante o desenvolvimento.
+o protocolo é independente de fabricante e não exige uma Raspberry Pi para
+começar.
 
-> **Do arquivo ONNX ao dispositivo físico em um único fluxo.**
+> **Do arquivo ONNX ao dispositivo físico em um único fluxo verificável.**
 
-## O fluxo da v0.7
+## O fluxo da v0.8
 
-![Demonstração do lifecycle remoto do MiraiOS](https://raw.githubusercontent.com/start6202783-dotcom/MiraiOS/main/docs/assets/miraios-demo.gif)
+![Demonstração do Hikari Link no MiraiOS](https://raw.githubusercontent.com/start6202783-dotcom/MiraiOS/main/docs/assets/miraios-demo.gif)
 
-A v0.7 fecha o primeiro ciclo operacional completo do projeto:
+A v0.8 adiciona o **Hikari Link**, a camada de confiança entre a CLI e o Agent:
 
 | Etapa | O que acontece |
 | --- | --- |
-| **Discover** | A CLI consulta sistema, arquitetura, CPU, memória e providers. |
-| **Deploy** | O modelo é enviado com SHA-256, validado e aberto no runtime. |
-| **Activate** | Um deployment `ready` se torna o único modelo `active`. |
-| **Run** | A CLI envia entradas ao Agent e recebe resultado e latência. |
-| **Observe** | Deploys, ativações, sucessos e falhas viram eventos persistentes. |
+| **Identify** | O Agent cria uma identidade TLS persistente e mostra seu fingerprint. |
+| **Pair** | Um código efêmero autoriza uma única CLI e gera um token revogável. |
+| **Verify** | A CLI fixa o fingerprint antes de enviar código, token ou modelo. |
+| **Operate** | Deploy, ativação, inferência, eventos e métricas exigem autenticação. |
+| **Diagnose** | `mirai doctor` verifica canal, autenticação, versões e runtime. |
+| **Revoke** | A CLI encerra o próprio acesso e remove a credencial local. |
 
-O estado ativo e os modelos sobrevivem à reinicialização do Agent.
+O lifecycle e as credenciais sobrevivem à reinicialização do Agent. O código
+de pareamento não é persistido e expira após dez minutos.
 
 ## Por que este projeto existe
 
 - **Local-first:** a inferência acontece onde o dado é produzido.
 - **Sem hardware obrigatório:** Linux local e Docker validam o protocolo antes
   da compra de uma placa.
+- **Canal verificável:** HTTPS, fingerprint fixado e token por cliente evitam
+  confiar silenciosamente no primeiro servidor encontrado.
 - **Lifecycle explícito:** receber um arquivo não significa ativá-lo; cada
   transição é intencional e observável.
 - **Formato aberto:** ONNX reduz o acoplamento a um framework de treinamento.
-- **Base pequena e auditável:** CLI, cliente HTTP, Agent e runtime são módulos
-  Python independentes, sem framework web obrigatório.
+- **Base pequena e auditável:** CLI, cliente, Agent, segurança e runtime são
+  módulos Python independentes, sem framework web obrigatório.
 
 ## Status atual
 
-| Capacidade | v0.7 |
+| Capacidade | v0.8 |
 | --- | --- |
 | Validação estrutural com `onnx.checker` | Pronto |
 | Inferência local numérica, JSON e imagens | Pronto |
 | Benchmark com warm-up, mediana, P95 e IPS | Pronto |
-| Registro de dispositivos | Pronto |
-| Deploy com verificação SHA-256 | Pronto |
-| Lifecycle persistente `ready` / `active` | Pronto |
-| Inferência remota numérica e JSON | Pronto |
-| Eventos e métricas de inferência | Pronto |
+| Deploy verificado e lifecycle `ready` / `active` | Pronto |
+| Inferência remota, eventos e métricas | Pronto |
+| Identidade TLS persistente e fingerprint SHA-256 | Pronto |
+| Pareamento de uso único e autenticação por cliente | Pronto |
+| Diagnóstico e revogação pela CLI | Pronto |
 | Imagens em inferência remota | Ainda não |
-| Autenticação e pareamento | Ainda não |
 | Provider validado no CI | ONNX Runtime CPU |
 
-O projeto está em estágio **alpha**. A API v0.7 é destinada a desenvolvimento
-local e não deve ser exposta diretamente à internet.
+O projeto está em estágio **alpha**. A v0.8 foi desenhada para laboratório,
+localhost e redes privadas controladas; ela ainda não é um gateway para
+exposição direta à internet.
 
 ## Arquitetura
 
 ```mermaid
 flowchart TD
     CLI["Mirai CLI"]
-    REG["Registro de dispositivos"]
+    REG["Registro local protegido"]
+    LINK["Hikari Link<br/>TLS + pinning + token"]
     API["Mirai Agent API v1"]
     LIFE["Lifecycle persistente"]
     ORT["ONNX Runtime"]
-    EDGE["Linux local · Docker · futuro ARM64"]
+    EDGE["Linux · Docker · futuro ARM64"]
 
     CLI --> REG
-    CLI --> API
+    CLI --> LINK
+    LINK --> API
     API --> LIFE
     LIFE --> ORT
     ORT --> EDGE
@@ -106,12 +113,14 @@ O Agent usa armazenamento simples e inspecionável:
 
 | Item | Função |
 | --- | --- |
+| `identity.json` + `agent-*.pem` | Identidade e certificado persistentes. |
+| `clients.json` | Clientes pareados; contém somente hashes dos tokens. |
 | `models/` | Modelos ONNX validados e identificados pelo hash. |
 | `deployments.json` | Deployments, estados e seleção ativa. |
-| `events.jsonl` | Histórico de deploys, ativações e inferências. |
+| `events.jsonl` | Histórico de pareamentos, deploys, ativações e inferências. |
 
-A especificação do marco está em
-[Projeto Hikari v0.7](docs/hikari-v0.7.md).
+A especificação e o modelo de ameaças estão em
+[Projeto Hikari v0.8](docs/hikari-v0.8.md).
 
 ## Comece em 3 minutos
 
@@ -145,7 +154,7 @@ Também é possível instalar a versão publicada:
 python -m pip install --upgrade miraios
 ```
 
-### 2. Inicie um Agent
+### 2. Inicie um Agent local
 
 No primeiro terminal:
 
@@ -153,7 +162,8 @@ No primeiro terminal:
 mirai agent start
 ```
 
-Por segurança, o endereço padrão é `http://127.0.0.1:8080`.
+O endereço padrão é `http://127.0.0.1:8080`. Esse modo deliberadamente
+dispensa pareamento porque só aceita conexões da própria máquina.
 
 ### 3. Faça deploy, ative e execute
 
@@ -162,7 +172,7 @@ No segundo terminal:
 ```bash
 python scripts/create_dummy_model.py
 mirai device add local --url http://127.0.0.1:8080
-mirai device info local
+mirai doctor --device local
 mirai deploy examples/dummy_model.onnx --device local
 mirai status --device local
 mirai activate 153f2947c78a0313 --device local
@@ -171,8 +181,40 @@ mirai logs --device local
 ```
 
 O modelo de exemplo soma `1` à entrada, portanto o resultado esperado é
-`6.0`. Para outro modelo, use no comando `activate` o identificador exibido
-por `mirai deploy`.
+`6.0`. Use no comando `activate` o identificador exibido pelo seu `deploy`.
+
+## Conecte um dispositivo na rede
+
+No dispositivo de destino, inicie o Agent em um endereço de rede:
+
+```bash
+mirai agent start --host 0.0.0.0
+```
+
+Fora de localhost, o Agent ativa HTTPS e autenticação automaticamente. Ele
+exibe um **código de uso único** e um **fingerprint SHA-256**. Confira esses
+dois valores diretamente no terminal do dispositivo e, no computador com a
+CLI, execute:
+
+```bash
+mirai device pair edge \
+  --url https://192.168.1.40:8080 \
+  --code CODIGO-EXIBIDO \
+  --fingerprint SHA256-EXIBIDO
+
+mirai doctor --device edge
+```
+
+Substitua o IP e os valores pelos exibidos pelo Agent. O fingerprint é
+verificado antes que o código seja transmitido. Depois do pareamento, os
+comandos existentes usam o canal autenticado sem receber segredos na linha de
+comando.
+
+Para encerrar o acesso dessa CLI:
+
+```bash
+mirai device revoke edge
+```
 
 ## Comandos
 
@@ -182,8 +224,12 @@ por `mirai deploy`.
 | `mirai info modelo.onnx` | Exibe entradas, saídas, tipos, shapes e nós. |
 | `mirai run modelo.onnx --input 5` | Executa inferência local. |
 | `mirai benchmark modelo.onnx` | Mede latência, P95 e vazão local. |
-| `mirai agent start` | Inicia o Agent no dispositivo. |
-| `mirai device add/list/info/remove` | Gerencia destinos. |
+| `mirai agent start` | Inicia o Agent local. |
+| `mirai agent start --host 0.0.0.0` | Inicia um Agent HTTPS pareável. |
+| `mirai device add/list/info/remove` | Gerencia destinos locais. |
+| `mirai device pair edge ...` | Verifica e pareia um Agent HTTPS. |
+| `mirai device revoke edge` | Revoga o token e remove o cadastro. |
+| `mirai doctor --device edge` | Diagnostica canal, versões e runtime. |
 | `mirai deploy modelo.onnx --device edge` | Envia e valida um modelo. |
 | `mirai status --device edge` | Lista deployments e o modelo ativo. |
 | `mirai activate ID --device edge` | Ativa um deployment pronto. |
@@ -222,16 +268,15 @@ preparados externamente.
 
 ### No Agent
 
-A inferência remota da v0.7 aceita escalares, arrays JSON e entradas nomeadas:
+A inferência remota aceita escalares, arrays JSON e entradas nomeadas:
 
 ```bash
 mirai run --device edge --input 5
 mirai run --device edge --input x=5 --input y=7
 ```
 
-Caminhos de imagens são rejeitados no Agent nesta versão. Isso evita que uma
-requisição tente ler arquivos arbitrários do dispositivo antes de existir um
-protocolo seguro de upload de entradas.
+Caminhos de imagens são rejeitados no Agent nesta versão. Um futuro pacote
+`.mirai` definirá os arquivos e o pré-processamento permitidos.
 
 ## Benchmark local
 
@@ -244,33 +289,51 @@ latência média, mediana, percentil 95 e inferências por segundo.
 
 ## Docker: dispositivo sem placa física
 
-O repositório inclui um Agent isolado em container:
+O repositório inclui um Agent HTTPS isolado em container:
 
 ```bash
 docker compose up --build -d
-mirai device add docker --url http://127.0.0.1:8080
-mirai device info docker
+docker compose logs mirai-agent
 ```
 
-O volume `mirai-agent-data` preserva modelos, lifecycle e eventos. Para
-encerrar:
+Copie dos logs o código e o fingerprint e faça o pareamento:
+
+```bash
+mirai device pair docker \
+  --url https://127.0.0.1:8080 \
+  --code CODIGO-EXIBIDO \
+  --fingerprint SHA256-EXIBIDO
+mirai doctor --device docker
+```
+
+O volume `mirai-agent-data` preserva identidade, clientes, modelos, lifecycle
+e eventos. Para encerrar:
 
 ```bash
 docker compose down
 ```
 
-## Segurança da v0.7
+## Segurança da v0.8
 
-O Agent ainda não implementa autenticação, autorização ou TLS próprio.
+O Hikari Link estabelece uma fronteira clara entre desenvolvimento local e
+acesso pela rede:
 
-- escuta apenas em `127.0.0.1` por padrão;
-- limita modelos a 512 MB e corpos JSON a 1 MB;
-- sanitiza nomes e verifica o SHA-256 antes da validação;
-- rejeita caminhos de imagens em requisições remotas;
-- não deve ser publicado na internet nem usado em uma rede não confiável.
+- HTTP sem autenticação é aceito somente em endereços de loopback;
+- qualquer escuta fora de loopback ativa HTTPS automaticamente;
+- o Agent gera certificado e chave RSA persistentes e exige TLS 1.2 ou mais;
+- a CLI fixa o fingerprint SHA-256 antes de enviar qualquer segredo;
+- o código de pareamento tem 12 caracteres, expira em dez minutos, fica apenas
+  em memória e só pode ser usado uma vez;
+- cada cliente recebe um token aleatório próprio e revogável;
+- o Agent persiste somente o SHA-256 do token; o registro da CLI usa permissão
+  `0600` em sistemas compatíveis;
+- somente `/v1/health` e `/v1/pair` são públicos no modo seguro;
+- respostas da API usam `Cache-Control: no-store`.
 
-Pareamento e autenticação são o próximo requisito arquitetural, não um detalhe
-opcional de produção.
+Ainda não há papéis de autorização, rotação automática de certificados,
+limitação de tentativas ou integração com uma autoridade certificadora. Use
+firewall, mantenha a porta em uma rede privada e não exponha o Agent
+diretamente à internet.
 
 ## Roadmap
 
@@ -282,13 +345,15 @@ opcional de produção.
   logs e Docker.
 - [x] **v0.7 — Operação:** lifecycle persistente, ativação, inferência remota
   e métricas.
+- [x] **v0.8 — Confiança:** identidade TLS, pinning, pareamento, autenticação,
+  diagnóstico e revogação.
 
 ### Próximo
 
-- [ ] Pareamento e autenticação entre CLI e Agent.
-- [ ] Pacote reproduzível `.mirai` com metadados e pré-processamento.
+- [ ] Pacote reproduzível `.mirai` com manifesto e pré-processamento.
 - [ ] Health check por modelo, rollback e histórico de ativações.
 - [ ] Saída JSON para automação e relatórios de benchmark.
+- [ ] Rotação de identidade, limitação de pareamento e papéis de acesso.
 
 ### Depois
 
@@ -330,6 +395,7 @@ Documentação dos marcos:
 
 - [v0.6 — Mirai Agent](docs/hikari-v0.6.md)
 - [v0.7 — lifecycle e inferência remota](docs/hikari-v0.7.md)
+- [v0.8 — Hikari Link](docs/hikari-v0.8.md)
 - [Changelog completo](CHANGELOG.md)
 
 ## Licença

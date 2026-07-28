@@ -117,7 +117,7 @@ def render_hero() -> None:
         fill="#173557",
     )
 
-    rounded_label(canvas, (626, 112), "PROJECT HIKARI  •  v0.7")
+    rounded_label(canvas, (626, 112), "PROJECT HIKARI  •  v0.8")
 
     title_font = font("DejaVuSans-Bold.ttf", 104)
     title_y = 188
@@ -152,7 +152,7 @@ def render_hero() -> None:
     )
 
     label_x = 630
-    for label in ("DEPLOY", "ACTIVATE", "RUN", "OBSERVE"):
+    for label in ("PAIR", "SECURE", "DEPLOY", "RUN"):
         rounded_label(
             canvas,
             (label_x, 502),
@@ -217,22 +217,46 @@ def terminal_frame(
     header_font = font("DejaVuSans-Bold.ttf", 20)
     draw.text(
         (455, 67),
-        "MiraiOS v0.7  •  remote lifecycle",
+        "MiraiOS v0.8  •  Hikari Link",
         font=header_font,
         fill="#C7D6EB",
     )
 
     lines: list[tuple[str, str]] = [
         (
-            "$ mirai device add local --url http://127.0.0.1:8080",
+            "$ mirai agent start --host 0.0.0.0",
             CYAN,
         ),
         (
-            "[MiraiOS] Dispositivo cadastrado: local",
+            "[MiraiOS] HTTPS • código e fingerprint exibidos",
             MUTED,
         ),
         (
-            "$ mirai deploy examples/dummy_model.onnx --device local",
+            "$ mirai device pair edge --url https://192.168.1.40:8080 \\",
+            CYAN,
+        ),
+        (
+            "  --code <CÓDIGO> --fingerprint <SHA-256>",
+            MUTED,
+        ),
+        (
+            "[MiraiOS] Dispositivo pareado: edge",
+            GREEN,
+        ),
+        (
+            "$ mirai doctor --device edge",
+            CYAN,
+        ),
+        (
+            "✓ Canal: HTTPS com fingerprint fixado",
+            GREEN,
+        ),
+        (
+            "✓ Autenticação: token pareado",
+            GREEN,
+        ),
+        (
+            "$ mirai deploy examples/dummy_model.onnx --device edge",
             CYAN,
         ),
         (
@@ -240,35 +264,11 @@ def terminal_frame(
             GREEN,
         ),
         (
-            "$ mirai status --device local",
+            "$ mirai run --device edge --input 5.0",
             CYAN,
         ),
         (
-            "○ 153f2947c78a0313 | dummy_model.onnx | ready",
-            MUTED,
-        ),
-        (
-            "$ mirai activate 153f2947c78a0313 --device local",
-            CYAN,
-        ),
-        (
-            "[MiraiOS] Deployment ativo: 153f2947c78a0313",
-            GREEN,
-        ),
-        (
-            "$ mirai run --device local --input 5.0",
-            CYAN,
-        ),
-        (
-            "[MiraiOS] Resultado da inferência: 6.0",
-            WHITE,
-        ),
-        (
-            "$ mirai logs --device local",
-            CYAN,
-        ),
-        (
-            "inference | success  •  result + latency + event",
+            "[MiraiOS] Resultado: 6.0 • acesso revogável",
             GREEN,
         ),
     ]
@@ -342,4 +342,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
