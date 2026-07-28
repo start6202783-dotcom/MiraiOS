@@ -12,9 +12,12 @@ from .agent import run_agent
 from .agent_client import (
     activate_deployment,
     deploy_model,
+    doctor_device,
     get_agent_info,
     get_agent_logs,
     get_deployment_status,
+    pair_device,
+    revoke_remote_device,
     run_remote_model,
 )
 from .benchmark import (
@@ -184,6 +187,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="substitui um cadastro existente com o mesmo nome",
     )
 
+    device_pair_parser = device_subparsers.add_parser(
+        "pair",
+        help="pareia com segurança um Agent HTTPS",
+    )
+    device_pair_parser.add_argument("name", metavar="NOME")
+    device_pair_parser.add_argument(
+        "--url",
+        required=True,
+        metavar="URL",
+        help="URL HTTPS exibida pelo Agent",
+    )
+    device_pair_parser.add_argument(
+        "--code",
+        required=True,
+        metavar="CÓDIGO",
+        help="código de uso único exibido no terminal do Agent",
+    )
+    device_pair_parser.add_argument(
+        "--fingerprint",
+        required=True,
+        metavar="SHA256",
+        help="fingerprint TLS exibido no terminal do Agent",
+    )
+    device_pair_parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="substitui um cadastro existente com o mesmo nome",
+    )
+
     device_subparsers.add_parser(
         "list",
         help="lista os dispositivos cadastrados",
@@ -200,6 +232,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="remove um dispositivo do registro",
     )
     device_remove_parser.add_argument("name", metavar="NOME")
+
+    device_revoke_parser = device_subparsers.add_parser(
+        "revoke",
+        help="revoga as credenciais e remove um dispositivo pareado",
+    )
+    device_revoke_parser.add_argument("name", metavar="NOME")
 
     deploy_parser = subparsers.add_parser(
         "deploy",
@@ -255,6 +293,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="quantidade de eventos, entre 1 e 200 (padrão: 20)",
     )
 
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help="diagnostica conexão, segurança e runtime de um dispositivo",
+    )
+    doctor_parser.add_argument(
+        "--device",
+        required=True,
+        dest="device_name",
+        metavar="NOME",
+    )
+
     agent_parser = subparsers.add_parser(
         "agent",
         help="executa o Mirai Agent neste dispositivo",
@@ -286,6 +335,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path(".mirai-agent"),
         metavar="DIRETÓRIO",
         help="armazenamento de modelos e eventos",
+    )
+    agent_start_parser.add_argument(
+        "--secure",
+        action="store_true",
+        help="ativa HTTPS e pareamento mesmo em localhost",
     )
     return parser
 
@@ -399,6 +453,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 return 0
 
+            if args.device_command == "pair":
+                device, pairing = pair_device(
+                    args.name,
+                    args.url,
+                    args.code,
+                    args.fingerprint,
+                    replace=args.replace,
+                )
+                print(
+                    f"[MiraiOS] Dispositivo pareado: "
+                    f"{device.name} ({device.url})"
+                )
+                print(f"[MiraiOS] Agent ID: {pairing['agent_id']}")
+                print(
+                    "[MiraiOS] Fingerprint TLS confirmado: "
+                    f"{pairing['fingerprint']}"
+                )
+                return 0
+
             if args.device_command == "list":
                 devices = load_devices()
                 if not devices:
@@ -406,7 +479,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     return 0
                 print("[MiraiOS] Dispositivos cadastrados:")
                 for device in devices.values():
-                    print(f"- {device.name}: {device.url}")
+                    mode = "pareado" if device.paired else "local"
+                    print(f"- {device.name}: {device.url} ({mode})")
                 return 0
 
             if args.device_command == "info":
@@ -431,6 +505,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.device_command == "remove":
                 device = remove_device(args.name)
                 print(f"[MiraiOS] Dispositivo removido: {device.name}")
+                return 0
+
+            if args.device_command == "revoke":
+                device = get_device(args.name)
+                revoked = revoke_remote_device(device)
+                remove_device(args.name)
+                print(
+                    f"[MiraiOS] Credenciais revogadas: "
+                    f"{device.name} ({revoked['client_id']})"
+                )
                 return 0
 
         if args.command == "deploy":
@@ -500,8 +584,56 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"- {timestamp} | {event_type} | {status}{suffix}")
             return 0
 
+        if args.command == "doctor":
+            device = get_device(args.device_name)
+            report = doctor_device(device)
+            health = report["health"]
+            info = report["info"]
+            deployments = report["deployments"]
+            connection_mode = (
+                "HTTPS com fingerprint fixado"
+                if report["tls"]
+                else "HTTP local"
+            )
+            authentication = (
+                "token pareado"
+                if report["authenticated"]
+                else "dispensada em localhost"
+            )
+            compatibility = (
+                "compatível" if report["compatible"] else "incompatível"
+            )
+            providers = ", ".join(info.get("providers") or []) or "nenhum"
+            print(f"[MiraiOS] Doctor: {device.name}")
+            print(f"✓ Conexão: {health.get('status', 'desconhecida')}")
+            print(f"✓ Canal: {connection_mode}")
+            print(f"✓ Autenticação: {authentication}")
+            print(
+                "✓ Versões: "
+                f"CLI {__version__} / Agent "
+                f"{health.get('agent_version', 'desconhecida')} "
+                f"({compatibility})"
+            )
+            print(f"✓ Runtime: {providers}")
+            print(
+                "✓ Deployments: "
+                f"{len(deployments.get('deployments') or [])}"
+            )
+            active_id = deployments.get("active_deployment_id")
+            print(f"✓ Ativo: {active_id or 'nenhum'}")
+            if not report["compatible"]:
+                raise MiraiRuntimeError(
+                    "as versões da CLI e do Agent não são compatíveis"
+                )
+            return 0
+
         if args.command == "agent" and args.agent_command == "start":
-            run_agent(args.host, args.port, args.data_dir)
+            run_agent(
+                args.host,
+                args.port,
+                args.data_dir,
+                force_secure=args.secure,
+            )
             return 0
     except MiraiRuntimeError as error:
         return print_error(str(error))

@@ -5,6 +5,37 @@ Todas as mudanças relevantes do MiraiOS serão documentadas neste arquivo.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e
 o projeto utiliza [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.8.0] - 2026-07-28
+
+### Adicionado
+
+- Hikari Link com identidade persistente para cada Mirai Agent;
+- certificado X.509 autoassinado e HTTPS automático fora de localhost;
+- pinagem do fingerprint SHA-256 antes de qualquer requisição;
+- código de pareamento efêmero, de uso único e com expiração de dez minutos;
+- token independente e revogável para cada cliente pareado;
+- comandos `mirai device pair` e `mirai device revoke`;
+- comando `mirai doctor` para conexão, canal, autenticação, versões e runtime;
+- persistência de clientes, eventos de pareamento e revogação;
+- fluxo HTTPS no container Docker e documentação do modelo de ameaças.
+
+### Segurança
+
+- todos os endpoints operacionais exigem bearer token no modo seguro;
+- o Agent armazena somente o SHA-256 dos tokens;
+- chave privada, clientes e registro da CLI usam modo `0600` em plataformas
+  compatíveis;
+- a CLI recusa credenciais em HTTP e Agents remotos sem pareamento;
+- respostas JSON recebem `Cache-Control: no-store` e `nosniff`;
+- testes cobrem fingerprint incorreto, token ausente, falso e revogado, código
+  expirado ou reutilizado e persistência após reinício.
+
+### Alterado
+
+- o registro local de dispositivos passou para o formato v2;
+- o Agent ativa o modo seguro automaticamente ao escutar fora de loopback;
+- a dependência `cryptography` passou a integrar o pacote.
+
 ## [0.7.0] - 2026-07-28
 
 ### Adicionado
@@ -91,3 +122,4 @@ o projeto utiliza [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 [0.5.0]: https://github.com/start6202783-dotcom/MiraiOS/releases/tag/v0.5.0
 [0.6.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.5.1...v0.6.0
 [0.7.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.6.0...v0.7.0
+[0.8.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.7.0...v0.8.0

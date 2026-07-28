@@ -7,8 +7,11 @@ import json
 import os
 import platform
 import re
+import ssl
+import sys
 import tempfile
 import threading
+from collections.abc import Callable
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,6 +25,13 @@ from .errors import MiraiRuntimeError
 from .inputs import IMAGE_EXTENSIONS
 from .inspect import validate_model
 from .runtime import create_session, load_runtime_dependencies, run_model
+from .security import (
+    AgentSecurity,
+    AuthenticationDenied,
+    PairingDenied,
+    format_fingerprint,
+    is_loopback_host,
+)
 
 
 MAX_MODEL_SIZE_BYTES = 512 * 1024 * 1024
@@ -54,7 +64,13 @@ def _public_deployment(deployment: dict[str, Any]) -> dict[str, Any]:
 class AgentState:
     """Mantém armazenamento e eventos de uma instância do Mirai Agent."""
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(
+        self,
+        data_dir: Path,
+        *,
+        secure: bool = False,
+        security_clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self.data_dir = data_dir.expanduser().resolve()
         self.models_dir = self.data_dir / "models"
         self.events_path = self.data_dir / "events.jsonl"
@@ -62,6 +78,13 @@ class AgentState:
         self._events_lock = threading.Lock()
         self._deployments_lock = threading.Lock()
         self.models_dir.mkdir(parents=True, exist_ok=True)
+        security_options: dict[str, Any] = {"secure": secure}
+        if security_clock is not None:
+            security_options["clock"] = security_clock
+        self.security = AgentSecurity(
+            self.data_dir,
+            **security_options,
+        )
 
     def append_event(self, event: dict[str, Any]) -> None:
         """Acrescenta um evento JSONL de forma segura entre threads."""
@@ -281,12 +304,34 @@ class MiraiAgentServer(ThreadingHTTPServer):
     ) -> None:
         super().__init__(server_address, MiraiAgentHandler)
         self.state = state
+        self.secure = state.security.secure
+        if self.secure:
+            context = state.security.create_server_context()
+            self.socket = context.wrap_socket(
+                self.socket,
+                server_side=True,
+            )
+
+    def handle_error(
+        self,
+        request: object,
+        client_address: tuple[str, int],
+    ) -> None:
+        """Silencia desconexões normais durante a verificação do TLS."""
+        error = sys.exc_info()[1]
+        if isinstance(
+            error,
+            (BrokenPipeError, ConnectionResetError, ssl.SSLError),
+        ):
+            return
+        super().handle_error(request, client_address)
 
 
 class MiraiAgentHandler(BaseHTTPRequestHandler):
     """Implementa a API HTTP v1 do Agent sem dependências web externas."""
 
     server: MiraiAgentServer
+    authenticated_client: dict[str, Any] | None = None
 
     def log_message(self, format: str, *args: object) -> None:
         """Evita duplicar no stderr os eventos persistidos pelo Agent."""
@@ -299,6 +344,8 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(encoded_payload)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Mirai-Agent-Version", __version__)
         self.end_headers()
         self.wfile.write(encoded_payload)
@@ -306,18 +353,73 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
     def _send_error(self, status: HTTPStatus, message: str) -> None:
         self._send_json(status, {"error": message})
 
+    def _bearer_token(self) -> str | None:
+        authorization = self.headers.get("Authorization", "")
+        scheme, separator, token = authorization.partition(" ")
+        if not separator or scheme.lower() != "bearer":
+            return None
+        return token.strip() or None
+
+    def _authorize(self) -> bool:
+        try:
+            self.authenticated_client = (
+                self.server.state.security.authenticate(
+                    self._bearer_token()
+                )
+            )
+        except AuthenticationDenied as error:
+            self.send_response(HTTPStatus.UNAUTHORIZED)
+            encoded_payload = json.dumps(
+                {"error": str(error)},
+                ensure_ascii=False,
+            ).encode("utf-8")
+            self.send_header(
+                "Content-Type",
+                "application/json; charset=utf-8",
+            )
+            self.send_header("Content-Length", str(len(encoded_payload)))
+            self.send_header("WWW-Authenticate", "Bearer")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Mirai-Agent-Version", __version__)
+            self.end_headers()
+            self.wfile.write(encoded_payload)
+            return False
+        except MiraiRuntimeError as error:
+            self._send_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                str(error),
+            )
+            return False
+        return True
+
     def do_GET(self) -> None:
         """Atende health check, informações e eventos."""
         request_url = urlsplit(self.path)
         if request_url.path == "/v1/health":
             self._send_json(
                 HTTPStatus.OK,
-                {"status": "ok", "agent_version": __version__},
+                {
+                    "status": "ok",
+                    "agent_version": __version__,
+                    "agent_id": self.server.state.security.agent_id,
+                    "tls": self.server.secure,
+                    "auth_required": self.server.secure,
+                    "pairing_available": (
+                        self.server.state.security.pairing_available()
+                    ),
+                },
             )
             return
 
+        if not self._authorize():
+            return
+
         if request_url.path == "/v1/info":
-            self._send_json(HTTPStatus.OK, collect_device_info())
+            self._send_json(
+                HTTPStatus.OK,
+                collect_device_info(self.server.state),
+            )
             return
 
         if request_url.path == "/v1/deployments":
@@ -356,6 +458,18 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, {"events": events})
             return
 
+        if request_url.path == "/v1/clients":
+            try:
+                clients = self.server.state.security.list_clients()
+            except MiraiRuntimeError as error:
+                self._send_error(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    str(error),
+                )
+                return
+            self._send_json(HTTPStatus.OK, {"clients": clients})
+            return
+
         self._send_error(HTTPStatus.NOT_FOUND, "endpoint não encontrado")
 
     def do_POST(self) -> None:
@@ -363,7 +477,12 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
         request_path = urlsplit(self.path).path
 
         try:
-            if request_path == "/v1/deployments":
+            if request_path == "/v1/pair":
+                payload = receive_pairing(self, self.server.state)
+                status = HTTPStatus.CREATED
+            elif not self._authorize():
+                return
+            elif request_path == "/v1/deployments":
                 payload = receive_deployment(self, self.server.state)
                 status = HTTPStatus.CREATED
             elif request_path == "/v1/inferences":
@@ -388,6 +507,9 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
         except AgentRequestError as error:
             self._send_error(error.status, str(error))
             return
+        except PairingDenied as error:
+            self._send_error(HTTPStatus.UNAUTHORIZED, str(error))
+            return
         except MiraiRuntimeError as error:
             self._send_error(HTTPStatus.UNPROCESSABLE_ENTITY, str(error))
             return
@@ -400,8 +522,45 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
 
         self._send_json(status, payload)
 
+    def do_DELETE(self) -> None:
+        """Revoga o cliente autenticado quando solicitado."""
+        request_path = urlsplit(self.path).path
+        if request_path != "/v1/clients/self":
+            self._send_error(HTTPStatus.NOT_FOUND, "endpoint não encontrado")
+            return
+        if not self._authorize():
+            return
+        try:
+            client = self.server.state.security.revoke(
+                self._bearer_token()
+            )
+            self.server.state.append_event(
+                {
+                    "type": "revocation",
+                    "status": "success",
+                    "client_id": client["client_id"],
+                    "client": client["name"],
+                }
+            )
+        except AuthenticationDenied as error:
+            self._send_error(HTTPStatus.UNAUTHORIZED, str(error))
+            return
+        except MiraiRuntimeError as error:
+            self._send_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                str(error),
+            )
+            return
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "status": "revoked",
+                "client_id": client["client_id"],
+            },
+        )
 
-def collect_device_info() -> dict[str, Any]:
+
+def collect_device_info(state: AgentState | None = None) -> dict[str, Any]:
     """Coleta capacidades portáveis sem assumir um fabricante específico."""
     try:
         ort, _ = load_runtime_dependencies()
@@ -410,6 +569,8 @@ def collect_device_info() -> dict[str, Any]:
         providers = []
     return {
         "agent_version": __version__,
+        "agent_id": state.security.agent_id if state else None,
+        "tls": state.security.secure if state else False,
         "hostname": platform.node() or "unknown",
         "system": platform.system(),
         "release": platform.release(),
@@ -526,10 +687,38 @@ def _remote_input_specs(payload: dict[str, Any]) -> list[str] | None:
         if Path(raw_value).suffix.lower() in IMAGE_EXTENSIONS:
             raise AgentRequestError(
                 HTTPStatus.UNPROCESSABLE_ENTITY,
-                "imagens remotas ainda não são suportadas na v0.7; "
+                "imagens remotas ainda não são suportadas nesta versão; "
                 "use entradas numéricas ou arrays JSON",
             )
     return input_specs
+
+
+def receive_pairing(
+    handler: MiraiAgentHandler,
+    state: AgentState,
+) -> dict[str, Any]:
+    """Consome um código efêmero e registra um cliente autenticado."""
+    payload = _json_body(handler)
+    client_name = payload.get("name")
+    pairing_code = payload.get("code")
+    if not isinstance(client_name, str) or not isinstance(
+        pairing_code,
+        str,
+    ):
+        raise AgentRequestError(
+            HTTPStatus.BAD_REQUEST,
+            "'name' e 'code' devem ser strings",
+        )
+    pairing = state.security.pair(client_name, pairing_code)
+    state.append_event(
+        {
+            "type": "pairing",
+            "status": "success",
+            "client_id": pairing["client_id"],
+            "client": pairing["name"],
+        }
+    )
+    return pairing
 
 
 def receive_deployment(
@@ -670,20 +859,65 @@ def create_agent_server(
     host: str,
     port: int,
     data_dir: Path,
+    *,
+    secure: bool = False,
+    security_clock: Callable[[], datetime] | None = None,
 ) -> MiraiAgentServer:
     """Cria um servidor configurável, inclusive com porta efêmera em testes."""
-    return MiraiAgentServer((host, port), AgentState(data_dir))
+    return MiraiAgentServer(
+        (host, port),
+        AgentState(
+            data_dir,
+            secure=secure,
+            security_clock=security_clock,
+        ),
+    )
 
 
-def run_agent(host: str, port: int, data_dir: Path) -> None:
+def run_agent(
+    host: str,
+    port: int,
+    data_dir: Path,
+    *,
+    force_secure: bool = False,
+) -> None:
     """Executa o Agent até receber interrupção do processo."""
-    server = create_agent_server(host, port, data_dir)
+    secure = force_secure or not is_loopback_host(host)
+    server = create_agent_server(
+        host,
+        port,
+        data_dir,
+        secure=secure,
+    )
     actual_host, actual_port = server.server_address[:2]
+    scheme = "https" if secure else "http"
     print(
         f"[MiraiOS] Agent v{__version__} ouvindo em "
-        f"http://{actual_host}:{actual_port}"
+        f"{scheme}://{actual_host}:{actual_port}"
     )
     print(f"[MiraiOS] Dados do Agent: {server.state.data_dir}")
+    if secure:
+        security = server.state.security
+        print(f"[MiraiOS] Agent ID: {security.agent_id}")
+        assert security.fingerprint is not None
+        print(
+            "[MiraiOS] Fingerprint TLS SHA-256: "
+            f"{format_fingerprint(security.fingerprint)}"
+        )
+        print(
+            "[MiraiOS] Código de pareamento (uso único): "
+            f"{security.pairing_code}"
+        )
+        expires_at = security.pairing_expires_at
+        if expires_at is not None:
+            print(
+                "[MiraiOS] Código válido até: "
+                f"{expires_at.isoformat()}"
+            )
+    else:
+        print(
+            "[MiraiOS] Modo local sem autenticação; somente localhost."
+        )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
