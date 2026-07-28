@@ -60,14 +60,22 @@ def request_json(
     path: str,
     *,
     method: str = "GET",
+    payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Executa uma requisição JSON simples contra o Agent."""
     connection, prefix = _connection(device)
+    body = None
+    headers = {"Accept": "application/json"}
+    if payload is not None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json; charset=utf-8"
+        headers["Content-Length"] = str(len(body))
     try:
         connection.request(
             method,
             f"{prefix}{path}",
-            headers={"Accept": "application/json"},
+            body=body,
+            headers=headers,
         )
         return _decode_response(device, connection.getresponse())
     except (OSError, TimeoutError, http.client.HTTPException) as error:
@@ -93,6 +101,50 @@ def get_agent_logs(device: Device, limit: int = 20) -> list[dict[str, Any]]:
             f"Agent '{device.name}' retornou logs em formato inválido"
         )
     return events
+
+
+def get_deployment_status(device: Device) -> dict[str, Any]:
+    """Retorna deployments conhecidos e o modelo ativo do Agent."""
+    payload = request_json(device, "/v1/deployments")
+    deployments = payload.get("deployments")
+    if not isinstance(deployments, list):
+        raise MiraiRuntimeError(
+            f"Agent '{device.name}' retornou deployments inválidos"
+        )
+    return payload
+
+
+def activate_deployment(
+    device: Device,
+    deployment_id: str,
+) -> dict[str, Any]:
+    """Ativa um deployment validado no dispositivo."""
+    return request_json(
+        device,
+        f"/v1/deployments/{deployment_id}/activate",
+        method="POST",
+    )
+
+
+def run_remote_model(
+    device: Device,
+    input_specs: list[str] | None,
+    layout: str,
+    model_name: str | None = None,
+) -> dict[str, Any]:
+    """Executa uma inferência no deployment ativo do Agent."""
+    payload: dict[str, Any] = {
+        "inputs": input_specs,
+        "layout": layout,
+    }
+    if model_name is not None:
+        payload["model"] = model_name
+    return request_json(
+        device,
+        "/v1/inferences",
+        method="POST",
+        payload=payload,
+    )
 
 
 def calculate_sha256(path: Path) -> str:

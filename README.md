@@ -1,109 +1,127 @@
 <div align="center">
 
-# 🚀 MiraiOS
+<img src="https://raw.githubusercontent.com/start6202783-dotcom/MiraiOS/main/docs/assets/miraios-hero.png" alt="MiraiOS — The Future Runs Local" width="100%">
 
-### The Future Runs Local
+<br>
 
-Plataforma Python enxuta para validar, implantar, executar e observar modelos
-ONNX em hardware local.
-
-[![PyPI](https://img.shields.io/pypi/v/miraios.svg?color=blue&label=PyPI)](https://pypi.org/project/miraios/)
 [![CI](https://github.com/start6202783-dotcom/MiraiOS/actions/workflows/ci.yml/badge.svg)](https://github.com/start6202783-dotcom/MiraiOS/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.13-blue)](pyproject.toml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/miraios.svg?color=00bfe8&label=PyPI)](https://pypi.org/project/miraios/)
+[![Python](https://img.shields.io/badge/Python-3.10%E2%80%933.13-247cff)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-f2c94c.svg)](LICENSE)
+[![ONNX](https://img.shields.io/badge/Runtime-ONNX-00d9ff)](https://onnxruntime.ai/)
 
-[Instalação](#-instalação) •
-[Comandos](#-mirai-cli) •
-[Deploy](#primeiro-deploy-com-o-mirai-agent) •
-[Entradas](#-entradas-de-modelo) •
-[Roadmap](#-roadmap) •
-[Contribuição](#-desenvolvimento-e-contribuição)
+**Uma camada operacional local-first para implantar, executar e observar IA
+em dispositivos Edge.**
+
+[Começar](#comece-em-3-minutos) ·
+[Demonstração](#o-fluxo-da-v07) ·
+[Arquitetura](#arquitetura) ·
+[CLI](#comandos) ·
+[Roadmap](#roadmap)
 
 </div>
 
----
+## O que é o MiraiOS?
 
-## 🌐 Sobre
+O **MiraiOS** é um projeto open-source do **Projeto Hikari** que conecta
+modelos ONNX a dispositivos Linux por um fluxo simples e reproduzível:
 
-O **MiraiOS** é um projeto open-source do **Projeto Hikari** para simplificar
-operações essenciais de Edge AI:
-
-- validar a estrutura de arquivos ONNX;
-- inspecionar nomes, tipos e shapes de tensores;
-- executar inferências numéricas ou com imagens;
-- preparar múltiplas entradas com os tipos esperados pelo modelo;
-- medir latência e vazão localmente;
-- cadastrar dispositivos que executam o Mirai Agent;
-- enviar e validar modelos em outro ambiente Linux.
-
-> Execute IA onde os dados são gerados.
-
-Executar modelos localmente pode reduzir latência, preservar privacidade,
-permitir operação offline e diminuir a dependência de infraestrutura em nuvem.
-
----
-
-## 🚧 Status do projeto
-
-| Item | Estado |
-| --- | --- |
-| Projeto | Hikari |
-| Fase | MVP |
-| Versão do código | v0.6.0 |
-| Distribuição | PyPI |
-| Provider atual | ONNX Runtime CPU |
-| Destino de deploy | Mirai Agent local/Linux |
-| Licença | MIT |
-
-A v0.6 é o primeiro marco de deploy do Projeto Hikari. A CLI e o Agent são
-processos independentes, permitindo desenvolver o protocolo de dispositivos
-com Docker antes da compra ou empréstimo de uma placa física.
-
----
-
-## 🏗️ Arquitetura
-
-```mermaid
-flowchart LR
-    CLI["Mirai CLI"]
-    REGISTRY["Registro de dispositivos"]
-    AGENT["Mirai Agent"]
-    VALIDATE["ONNX + SHA-256"]
-    RUNTIME["ONNX Runtime"]
-    HARDWARE["Linux local / futuro ARM64"]
-
-    CLI --> REGISTRY
-    CLI --> AGENT
-    AGENT --> VALIDATE
-    VALIDATE --> RUNTIME
-    RUNTIME --> HARDWARE
+```text
+modelo → deploy → validação → ativação → inferência → resultado + métricas
 ```
 
-O pacote separa CLI, registro de dispositivos, cliente HTTP, Agent, validação,
-preparação de entradas, runtime e benchmark em módulos independentes.
+A CLI permanece no computador do desenvolvedor. O **Mirai Agent** roda no
+destino, verifica o modelo, mantém o lifecycle dos deployments e executa a
+inferência. O primeiro destino pode ser o próprio computador ou um container;
+o protocolo foi separado do hardware para evoluir depois para ARM64 e placas
+Edge sem exigir uma Raspberry Pi durante o desenvolvimento.
 
-### 🧰 Mirai CLI
+> **Do arquivo ONNX ao dispositivo físico em um único fluxo.**
 
-| Comando | Descrição |
+## O fluxo da v0.7
+
+![Demonstração do lifecycle remoto do MiraiOS](https://raw.githubusercontent.com/start6202783-dotcom/MiraiOS/main/docs/assets/miraios-demo.gif)
+
+A v0.7 fecha o primeiro ciclo operacional completo do projeto:
+
+| Etapa | O que acontece |
 | --- | --- |
-| `mirai init` | Confirma que o ambiente do Projeto Hikari está pronto. |
-| `mirai validate modelo.onnx` | Carrega o arquivo e executa `onnx.checker`. |
-| `mirai info modelo.onnx` | Exibe entradas, saídas, shapes, tipos e nós. |
-| `mirai run modelo.onnx --input 5` | Executa uma inferência. |
-| `mirai benchmark modelo.onnx` | Mede latência, mediana, P95 e IPS. |
-| `mirai agent start` | Inicia um Agent local de desenvolvimento. |
-| `mirai device add/list/info/remove` | Gerencia destinos de deploy. |
-| `mirai deploy modelo.onnx --device local` | Envia e valida um modelo. |
-| `mirai logs --device local` | Exibe eventos recentes do Agent. |
+| **Discover** | A CLI consulta sistema, arquitetura, CPU, memória e providers. |
+| **Deploy** | O modelo é enviado com SHA-256, validado e aberto no runtime. |
+| **Activate** | Um deployment `ready` se torna o único modelo `active`. |
+| **Run** | A CLI envia entradas ao Agent e recebe resultado e latência. |
+| **Observe** | Deploys, ativações, sucessos e falhas viram eventos persistentes. |
 
----
+O estado ativo e os modelos sobrevivem à reinicialização do Agent.
 
-## 🚀 Instalação
+## Por que este projeto existe
 
-O MiraiOS requer Python 3.10 ou superior. Recomenda-se utilizar um ambiente
-virtual:
+- **Local-first:** a inferência acontece onde o dado é produzido.
+- **Sem hardware obrigatório:** Linux local e Docker validam o protocolo antes
+  da compra de uma placa.
+- **Lifecycle explícito:** receber um arquivo não significa ativá-lo; cada
+  transição é intencional e observável.
+- **Formato aberto:** ONNX reduz o acoplamento a um framework de treinamento.
+- **Base pequena e auditável:** CLI, cliente HTTP, Agent e runtime são módulos
+  Python independentes, sem framework web obrigatório.
+
+## Status atual
+
+| Capacidade | v0.7 |
+| --- | --- |
+| Validação estrutural com `onnx.checker` | Pronto |
+| Inferência local numérica, JSON e imagens | Pronto |
+| Benchmark com warm-up, mediana, P95 e IPS | Pronto |
+| Registro de dispositivos | Pronto |
+| Deploy com verificação SHA-256 | Pronto |
+| Lifecycle persistente `ready` / `active` | Pronto |
+| Inferência remota numérica e JSON | Pronto |
+| Eventos e métricas de inferência | Pronto |
+| Imagens em inferência remota | Ainda não |
+| Autenticação e pareamento | Ainda não |
+| Provider validado no CI | ONNX Runtime CPU |
+
+O projeto está em estágio **alpha**. A API v0.7 é destinada a desenvolvimento
+local e não deve ser exposta diretamente à internet.
+
+## Arquitetura
+
+```mermaid
+flowchart TD
+    CLI["Mirai CLI"]
+    REG["Registro de dispositivos"]
+    API["Mirai Agent API v1"]
+    LIFE["Lifecycle persistente"]
+    ORT["ONNX Runtime"]
+    EDGE["Linux local · Docker · futuro ARM64"]
+
+    CLI --> REG
+    CLI --> API
+    API --> LIFE
+    LIFE --> ORT
+    ORT --> EDGE
+```
+
+O Agent usa armazenamento simples e inspecionável:
+
+| Item | Função |
+| --- | --- |
+| `models/` | Modelos ONNX validados e identificados pelo hash. |
+| `deployments.json` | Deployments, estados e seleção ativa. |
+| `events.jsonl` | Histórico de deploys, ativações e inferências. |
+
+A especificação do marco está em
+[Projeto Hikari v0.7](docs/hikari-v0.7.md).
+
+## Comece em 3 minutos
+
+### 1. Instale a versão do repositório
+
+O MiraiOS requer Python 3.10 ou superior:
 
 ```bash
+git clone https://github.com/start6202783-dotcom/MiraiOS.git
+cd MiraiOS
 python -m venv .venv
 ```
 
@@ -111,282 +129,217 @@ Ative o ambiente no Linux ou macOS:
 
 ```bash
 source .venv/bin/activate
+python -m pip install --editable ".[dev]"
 ```
 
 No Windows PowerShell:
 
 ```powershell
 .venv\Scripts\Activate.ps1
+python -m pip install --editable ".[dev]"
 ```
 
-Instale ou atualize pelo PyPI:
+Também é possível instalar a versão publicada:
 
 ```bash
 python -m pip install --upgrade miraios
 ```
 
-Confirme a instalação:
+### 2. Inicie um Agent
 
-```bash
-mirai --version
-```
-
----
-
-## ⚡ Uso rápido
-
-### Primeiro deploy com o Mirai Agent
-
-Em um terminal, inicie um dispositivo local:
+No primeiro terminal:
 
 ```bash
 mirai agent start
 ```
 
-Em outro terminal, cadastre o Agent:
+Por segurança, o endereço padrão é `http://127.0.0.1:8080`.
+
+### 3. Faça deploy, ative e execute
+
+No segundo terminal:
 
 ```bash
+python scripts/create_dummy_model.py
 mirai device add local --url http://127.0.0.1:8080
 mirai device info local
-```
-
-Envie um modelo e consulte o evento:
-
-```bash
-mirai deploy seu_modelo.onnx --device local
+mirai deploy examples/dummy_model.onnx --device local
+mirai status --device local
+mirai activate 153f2947c78a0313 --device local
+mirai run --device local --input 5.0
 mirai logs --device local
 ```
 
-O Agent compara o SHA-256, valida o arquivo com `onnx.checker` e confirma que o
-modelo abre no ONNX Runtime do destino antes de registrar o deployment como
-pronto.
+O modelo de exemplo soma `1` à entrada, portanto o resultado esperado é
+`6.0`. Para outro modelo, use no comando `activate` o identificador exibido
+por `mirai deploy`.
 
-Para simular o dispositivo em um container, consulte
-[Projeto Hikari v0.6](docs/hikari-v0.6.md).
+## Comandos
 
-### Validar de verdade um modelo
+| Comando | Descrição |
+| --- | --- |
+| `mirai validate modelo.onnx` | Valida integralmente o protobuf ONNX. |
+| `mirai info modelo.onnx` | Exibe entradas, saídas, tipos, shapes e nós. |
+| `mirai run modelo.onnx --input 5` | Executa inferência local. |
+| `mirai benchmark modelo.onnx` | Mede latência, P95 e vazão local. |
+| `mirai agent start` | Inicia o Agent no dispositivo. |
+| `mirai device add/list/info/remove` | Gerencia destinos. |
+| `mirai deploy modelo.onnx --device edge` | Envia e valida um modelo. |
+| `mirai status --device edge` | Lista deployments e o modelo ativo. |
+| `mirai activate ID --device edge` | Ativa um deployment pronto. |
+| `mirai run --device edge --input 5` | Executa no deployment ativo. |
+| `mirai logs --device edge` | Consulta eventos recentes. |
 
-```bash
-mirai validate seu_modelo.onnx
-```
+Execute `mirai COMANDO --help` para ver todas as opções.
 
-Além de verificar caminho e extensão, o comando carrega o protobuf ONNX e
-executa a validação estrutural oficial do formato.
+## Entradas e inferência
 
-### Inspecionar entradas e saídas
+### Local
 
-```bash
-mirai info seu_modelo.onnx
-```
-
-### Executar uma entrada escalar
-
-```bash
-mirai run seu_modelo.onnx --input 5.0
-```
-
-O valor é convertido para o dtype do modelo e expandido para o shape fixo
-esperado. Arrays podem ser fornecidos como JSON:
+Escalares e arrays JSON são convertidos para o dtype e o shape esperados:
 
 ```bash
-mirai run seu_modelo.onnx --input "[[1, 2, 3]]"
+mirai run modelo.onnx --input 5.0
+mirai run modelo.onnx --input "[[1, 2, 3]]"
 ```
 
-### Executar múltiplas entradas
-
-Repita `--input` e identifique cada tensor pelo nome apresentado por
-`mirai info`:
+Modelos com múltiplas entradas aceitam nome ou ordem:
 
 ```bash
 mirai run soma.onnx --input x=5 --input y=7
-```
-
-Valores posicionais também são aceitos na ordem das entradas do modelo:
-
-```bash
 mirai run soma.onnx --input 5 --input 7
 ```
 
-### Executar uma imagem
+Imagens NCHW e NHWC são suportadas localmente:
 
 ```bash
-mirai run visao.onnx --input foto.jpg
+mirai run visao.onnx --input foto.jpg --layout auto
 ```
 
-O MiraiOS detecta automaticamente modelos NCHW e NHWC quando o shape não é
-ambíguo. Para escolher explicitamente:
+O pré-processamento de visão é intencionalmente básico. Modelos que exigem
+mean/std, letterbox, BGR ou tokenização ainda precisam receber tensores
+preparados externamente.
+
+### No Agent
+
+A inferência remota da v0.7 aceita escalares, arrays JSON e entradas nomeadas:
 
 ```bash
-mirai run visao.onnx --input foto.jpg --layout nchw
-mirai run visao.onnx --input foto.jpg --layout nhwc
+mirai run --device edge --input 5
+mirai run --device edge --input x=5 --input y=7
 ```
 
-Imagens destinadas a tensores de ponto flutuante são convertidas para o
-intervalo `[0, 1]`. Entradas `uint8` preservam a escala de pixels.
+Caminhos de imagens são rejeitados no Agent nesta versão. Isso evita que uma
+requisição tente ler arquivos arbitrários do dispositivo antes de existir um
+protocolo seguro de upload de entradas.
 
-### Medir desempenho
+## Benchmark local
 
 ```bash
-mirai benchmark seu_modelo.onnx --runs 100 --warmup 5
+mirai benchmark modelo.onnx --runs 100 --warmup 5
 ```
 
-O benchmark exclui o carregamento do modelo e informa:
+O carregamento do modelo não entra na medição. O relatório inclui tempo total,
+latência média, mediana, percentil 95 e inferências por segundo.
 
-- tempo total medido;
-- latência média;
-- mediana;
-- percentil 95;
-- inferências por segundo.
+## Docker: dispositivo sem placa física
 
-O comando aceita as mesmas opções `--input` e `--layout` do `mirai run`:
+O repositório inclui um Agent isolado em container:
 
 ```bash
-mirai benchmark visao.onnx \
-  --input foto.jpg \
-  --layout nchw \
-  --runs 100 \
-  --warmup 5
+docker compose up --build -d
+mirai device add docker --url http://127.0.0.1:8080
+mirai device info docker
 ```
 
----
-
-## 🧩 Entradas de modelo
-
-| Recurso | v0.6 |
-| --- | --- |
-| Escalares numéricos | ✅ |
-| Arrays JSON | ✅ |
-| Dtype obtido do modelo | ✅ |
-| Shapes fixos e dimensões dinâmicas | ✅ |
-| Entradas nomeadas | ✅ |
-| Múltiplas entradas | ✅ |
-| Imagens NCHW | ✅ |
-| Imagens NHWC | ✅ |
-| Imagens float e `uint8` | ✅ |
-| Batch de múltiplas imagens | Ainda não |
-| Normalização específica por modelo | Ainda não |
-| Providers CUDA e DirectML | Roadmap |
-
-O pré-processamento de visão da v0.6 é propositalmente básico. Modelos que
-exigem mean/std, letterbox, BGR ou tokenização devem receber tensores já
-preparados ou aguardar os perfis de pré-processamento previstos no roadmap.
-
----
-
-## 🗺️ Roadmap
-
-### Projeto Hikari — estabilização v0.5.1
-
-- [x] Validar a estrutura real com `onnx.checker`.
-- [x] Separar CLI, inspeção, entradas, runtime e benchmark.
-- [x] Respeitar shapes e tipos informados pelo modelo.
-- [x] Suportar entradas nomeadas e múltiplas entradas.
-- [x] Corrigir imagens NCHW, NHWC, float e `uint8`.
-- [x] Adicionar warm-up, mediana e P95 ao benchmark.
-- [x] Adicionar testes automatizados.
-- [x] Adicionar CI para Python 3.10–3.13.
-
-### Projeto Hikari — deploy v0.6
-
-- [x] Criar um Mirai Agent independente.
-- [x] Registrar dispositivos por nome e URL.
-- [x] Detectar sistema, arquitetura e providers do destino.
-- [x] Enviar modelos com verificação SHA-256.
-- [x] Validar e abrir o modelo no runtime do Agent.
-- [x] Persistir eventos e expô-los por `mirai logs`.
-- [x] Simular um dispositivo com Docker Compose.
-- [x] Manter o Agent restrito a localhost por padrão.
-
-### Próximas versões
-
-- [ ] Adicionar pareamento e autenticação entre CLI e Agent.
-- [ ] Criar pacote reproduzível `.mirai`.
-- [ ] Executar inferência remota e health checks de modelos.
-- [ ] Selecionar providers CUDA e DirectML.
-- [ ] Exportar relatórios de benchmark em JSON.
-- [ ] Detectar automaticamente o hardware local.
-- [ ] Criar perfis configuráveis de pré-processamento.
-- [ ] Ampliar e validar compatibilidade com ARM.
-- [ ] Adicionar suporte experimental a RISC-V.
-
----
-
-## 📁 Estrutura do projeto
-
-```text
-MiraiOS/
-├── .github/workflows/ci.yml
-├── docker/
-│   └── agent.Dockerfile
-├── docs/
-│   └── hikari-v0.6.md
-├── examples/
-│   └── dummy_model.onnx
-├── scripts/
-│   └── create_dummy_model.py
-├── src/mirai/
-│   ├── __init__.py
-│   ├── agent.py
-│   ├── agent_client.py
-│   ├── benchmark.py
-│   ├── cli.py
-│   ├── devices.py
-│   ├── errors.py
-│   ├── inputs.py
-│   ├── inspect.py
-│   ├── main.py
-│   └── runtime.py
-├── tests/
-├── CHANGELOG.md
-├── compose.yaml
-├── CONTRIBUTING.md
-├── LICENSE
-├── pyproject.toml
-└── README.md
-```
-
----
-
-## 🧪 Desenvolvimento e contribuição
-
-Clone o repositório e instale as dependências de desenvolvimento:
+O volume `mirai-agent-data` preserva modelos, lifecycle e eventos. Para
+encerrar:
 
 ```bash
-git clone https://github.com/start6202783-dotcom/MiraiOS.git
-cd MiraiOS
-python -m venv .venv
+docker compose down
+```
+
+## Segurança da v0.7
+
+O Agent ainda não implementa autenticação, autorização ou TLS próprio.
+
+- escuta apenas em `127.0.0.1` por padrão;
+- limita modelos a 512 MB e corpos JSON a 1 MB;
+- sanitiza nomes e verifica o SHA-256 antes da validação;
+- rejeita caminhos de imagens em requisições remotas;
+- não deve ser publicado na internet nem usado em uma rede não confiável.
+
+Pareamento e autenticação são o próximo requisito arquitetural, não um detalhe
+opcional de produção.
+
+## Roadmap
+
+### Entregue
+
+- [x] **v0.5.1 — Runtime:** validação real, inferência, imagens, benchmark,
+  testes e CI.
+- [x] **v0.6 — Deploy:** Agent, registro de dispositivos, upload verificado,
+  logs e Docker.
+- [x] **v0.7 — Operação:** lifecycle persistente, ativação, inferência remota
+  e métricas.
+
+### Próximo
+
+- [ ] Pareamento e autenticação entre CLI e Agent.
+- [ ] Pacote reproduzível `.mirai` com metadados e pré-processamento.
+- [ ] Health check por modelo, rollback e histórico de ativações.
+- [ ] Saída JSON para automação e relatórios de benchmark.
+
+### Depois
+
+- [ ] Descoberta de dispositivos e visão de frota.
+- [ ] Seleção explícita de providers e perfis de hardware.
+- [ ] Compatibilidade validada em ARM64.
+- [ ] Providers CUDA e DirectML.
+- [ ] Suporte experimental a outros runtimes e RISC-V.
+
+O roadmap prioriza um protocolo seguro e útil antes de ampliar a quantidade de
+hardwares suportados.
+
+## Desenvolvimento
+
+Instale as dependências de desenvolvimento e execute a suíte:
+
+```bash
 python -m pip install --editable ".[dev]"
-```
-
-Execute a suíte:
-
-```bash
+python -m compileall -q src tests scripts
 python -m pytest
 ```
 
-As orientações completas estão em [CONTRIBUTING.md](CONTRIBUTING.md).
+O CI executa os testes em Python 3.10, 3.11, 3.12 e 3.13. Consulte
+[CONTRIBUTING.md](CONTRIBUTING.md) antes de enviar mudanças.
 
----
+Os ativos visuais do README são reproduzíveis:
 
-## 📄 Licença
+```bash
+python scripts/render_readme_assets.py
+```
 
-Distribuído sob a licença **MIT**. Consulte [LICENSE](LICENSE).
+## Projeto Hikari
 
----
+**Hikari** é a primeira fase do MiraiOS: construir uma camada pequena,
+portátil e verificável entre modelos de IA e hardware local. O nome Mirai
+significa “futuro”; Hikari, “luz”.
 
-## 🌅 Projeto Hikari
+Documentação dos marcos:
 
-**Hikari** é a primeira etapa do MiraiOS: um MVP para validar os fundamentos de
-uma camada portátil entre modelos ONNX e hardware local.
+- [v0.6 — Mirai Agent](docs/hikari-v0.6.md)
+- [v0.7 — lifecycle e inferência remota](docs/hikari-v0.7.md)
+- [Changelog completo](CHANGELOG.md)
 
-> Pequeno no runtime. Grande no futuro.
+## Licença
 
----
+Distribuído sob a [licença MIT](LICENSE).
 
 <div align="center">
 
-**MiraiOS — The Future Runs Local**
+<img src="https://raw.githubusercontent.com/start6202783-dotcom/MiraiOS/main/docs/assets/miraios-logo-primary.png" alt="Logotipo MiraiOS" width="420">
 
-Feito para levar a Inteligência Artificial além da nuvem. 🚀
+**The Future Runs Local**
 
 </div>
