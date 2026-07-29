@@ -38,3 +38,30 @@ jobs:
 
       - name: Test
         run: python -m pytest
+
+  package:
+    name: Build distribution
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build frontend
+        run: python -m pip install --upgrade build pip
+
+      - name: Build wheel and source archive
+        run: python -m build
+
+      - name: Smoke-test wheel
+        run: |
+          python -m pip install --no-deps dist/*.whl
+          mirai --version
+          python -c "from mirai.package import MIRAI_FORMAT_VERSION; assert MIRAI_FORMAT_VERSION == 1"

@@ -253,8 +253,43 @@ def test_agent_accepts_validated_deployment(
         dummy_model.read_bytes()
     ).hexdigest()
     assert deployment["deployment_id"] == deployment["sha256"][:16]
+    assert deployment["artifact_type"] == "onnx"
+    assert deployment["artifact_name"] == dummy_model.name
+    assert deployment["model_sha256"] == deployment["sha256"]
     assert events[0]["deployment_id"] == deployment["deployment_id"]
     assert get_deployment_status(agent_device)["active_deployment_id"] is None
+
+
+def test_agent_deploys_activates_and_runs_mirai_package(
+    agent_device: Device,
+    dummy_package: Path,
+) -> None:
+    package_sha256 = hashlib.sha256(dummy_package.read_bytes()).hexdigest()
+    deployment = deploy_model(agent_device, dummy_package)
+    activated = activate_deployment(
+        agent_device,
+        deployment["deployment_id"],
+    )
+    inference = run_remote_model(
+        agent_device,
+        ["5.0"],
+        "auto",
+        dummy_package.name,
+    )
+    status = get_deployment_status(agent_device)["deployments"][0]
+
+    assert deployment["artifact_type"] == "mirai"
+    assert deployment["artifact_name"] == dummy_package.name
+    assert deployment["sha256"] == package_sha256
+    assert deployment["model"] == "dummy.onnx"
+    assert deployment["package"]["name"] == "dummy"
+    assert deployment["package"]["version"] == "1.0.0"
+    assert deployment["contract"]["inputs"][0]["name"] == "input"
+    assert "file_name" not in deployment
+    assert "package_file_name" not in deployment
+    assert activated["status"] == "active"
+    assert inference["result"] == 6.0
+    assert status["package"]["format_version"] == 1
 
 
 def test_agent_activates_and_runs_deployment(

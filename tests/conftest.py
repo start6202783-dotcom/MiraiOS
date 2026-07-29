@@ -11,6 +11,8 @@ import pytest
 from onnx import TensorProto, helper, numpy_helper
 from PIL import Image
 
+from mirai.package import create_mirai_package
+
 
 TEST_MODEL_IR_VERSION = 10
 
@@ -93,6 +95,20 @@ def dummy_model(tmp_path: Path) -> Path:
     )
     path = tmp_path / "dummy.onnx"
     return save_runtime_compatible_model(model, path)
+
+
+@pytest.fixture
+def dummy_package(dummy_model: Path, tmp_path: Path) -> Path:
+    """Empacota o modelo simples no formato público .mirai v1."""
+    path = tmp_path / "dummy-1.0.0.mirai"
+    create_mirai_package(
+        dummy_model,
+        path,
+        name="dummy",
+        package_version="1.0.0",
+        description="Modelo determinístico de teste",
+    )
+    return path
 
 
 @pytest.fixture

@@ -28,6 +28,41 @@ def test_validate_command(dummy_model: Path, capsys: pytest.CaptureFixture[str])
     assert "Modelo ONNX válido" in capsys.readouterr().out
 
 
+def test_pack_validate_info_and_run_commands(
+    dummy_model: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    package_path = tmp_path / "example.mirai"
+
+    assert (
+        main(
+            [
+                "pack",
+                str(dummy_model),
+                "--name",
+                "example",
+                "--package-version",
+                "1.0.0",
+                "--description",
+                "Exemplo da CLI",
+                "--output",
+                str(package_path),
+            ]
+        )
+        == 0
+    )
+    assert main(["validate", str(package_path)]) == 0
+    assert main(["info", str(package_path)]) == 0
+    assert main(["run", str(package_path), "--input", "5.0"]) == 0
+
+    output = capsys.readouterr().out
+    assert "Pacote criado" in output
+    assert "Pacote .mirai válido" in output
+    assert "Pacote: example v1.0.0" in output
+    assert "Resultado da inferência: 6.0" in output
+
+
 def test_validate_command_rejects_fake_onnx(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

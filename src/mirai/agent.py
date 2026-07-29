@@ -24,6 +24,14 @@ from . import __version__
 from .errors import MiraiRuntimeError
 from .inputs import IMAGE_EXTENSIONS
 from .inspect import validate_model
+from .package import (
+    MAX_MODEL_SIZE_BYTES,
+    MAX_PACKAGE_SIZE_BYTES,
+    MIRAI_EXTENSION,
+    extract_mirai_model,
+    load_mirai_package,
+    validate_runtime_contract,
+)
 from .runtime import create_session, load_runtime_dependencies, run_model
 from .security import (
     AgentSecurity,
@@ -34,7 +42,7 @@ from .security import (
 )
 
 
-MAX_MODEL_SIZE_BYTES = 512 * 1024 * 1024
+MAX_ARTIFACT_SIZE_BYTES = MAX_PACKAGE_SIZE_BYTES
 MAX_JSON_BODY_BYTES = 1024 * 1024
 DEPLOYMENT_REGISTRY_VERSION = 1
 SAFE_MODEL_NAME_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
@@ -57,7 +65,7 @@ def _public_deployment(deployment: dict[str, Any]) -> dict[str, Any]:
     return {
         key: value
         for key, value in deployment.items()
-        if key != "file_name"
+        if key not in {"file_name", "package_file_name"}
     }
 
 
@@ -73,11 +81,13 @@ class AgentState:
     ) -> None:
         self.data_dir = data_dir.expanduser().resolve()
         self.models_dir = self.data_dir / "models"
+        self.packages_dir = self.data_dir / "packages"
         self.events_path = self.data_dir / "events.jsonl"
         self.deployments_path = self.data_dir / "deployments.json"
         self._events_lock = threading.Lock()
         self._deployments_lock = threading.Lock()
         self.models_dir.mkdir(parents=True, exist_ok=True)
+        self.packages_dir.mkdir(parents=True, exist_ok=True)
         security_options: dict[str, Any] = {"secure": secure}
         if security_clock is not None:
             security_options["clock"] = security_clock
@@ -276,12 +286,16 @@ class AgentState:
                 )
 
             if expected_model:
-                model_name = _safe_model_name(expected_model)
-                if deployment.get("model") != model_name:
+                artifact_name = _safe_artifact_name(expected_model)
+                accepted_names = {
+                    deployment.get("model"),
+                    deployment.get("artifact_name"),
+                }
+                if artifact_name not in accepted_names:
                     raise AgentRequestError(
                         HTTPStatus.CONFLICT,
                         f"o modelo ativo é '{deployment.get('model')}', "
-                        f"não '{model_name}'",
+                        f"não '{artifact_name}'",
                     )
 
             model_path = self.models_dir / deployment["file_name"]
@@ -593,22 +607,32 @@ def _memory_total_bytes() -> int | None:
     return page_size * physical_pages
 
 
-def _safe_model_name(raw_name: str | None) -> str:
+def _safe_artifact_name(raw_name: str | None) -> str:
     if not raw_name:
         raise AgentRequestError(
             HTTPStatus.BAD_REQUEST,
-            "cabeçalho X-Mirai-Model-Name ausente",
+            "nome do artefato ausente",
         )
     safe_name = SAFE_MODEL_NAME_PATTERN.sub("-", Path(raw_name).name).strip("-")
-    if not safe_name.lower().endswith(".onnx"):
+    suffix = Path(safe_name).suffix.lower()
+    if suffix not in {".onnx", MIRAI_EXTENSION}:
         raise AgentRequestError(
             HTTPStatus.BAD_REQUEST,
-            "o modelo enviado deve usar a extensão .onnx",
+            "o artefato enviado deve usar a extensão .onnx ou .mirai",
         )
-    return safe_name[:128]
+    stem = safe_name[: -len(suffix)].strip(".-_")
+    if not stem:
+        raise AgentRequestError(
+            HTTPStatus.BAD_REQUEST,
+            "nome do artefato inválido",
+        )
+    return f"{stem[: 128 - len(suffix)]}{suffix}"
 
 
-def _content_length(handler: MiraiAgentHandler) -> int:
+def _content_length(
+    handler: MiraiAgentHandler,
+    artifact_suffix: str,
+) -> int:
     raw_length = handler.headers.get("Content-Length")
     try:
         content_length = int(raw_length or "")
@@ -618,11 +642,16 @@ def _content_length(handler: MiraiAgentHandler) -> int:
             "Content-Length ausente ou inválido",
         ) from error
     if content_length <= 0:
-        raise AgentRequestError(HTTPStatus.BAD_REQUEST, "modelo vazio")
-    if content_length > MAX_MODEL_SIZE_BYTES:
+        raise AgentRequestError(HTTPStatus.BAD_REQUEST, "artefato vazio")
+    limit = (
+        MAX_ARTIFACT_SIZE_BYTES
+        if artifact_suffix == MIRAI_EXTENSION
+        else MAX_MODEL_SIZE_BYTES
+    )
+    if content_length > limit:
         raise AgentRequestError(
             HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-            "modelo excede o limite de 512 MB desta versão",
+            "artefato excede o limite desta versão",
         )
     return content_length
 
@@ -725,23 +754,28 @@ def receive_deployment(
     handler: MiraiAgentHandler,
     state: AgentState,
 ) -> dict[str, Any]:
-    """Recebe, verifica e ativa logicamente um modelo no dispositivo."""
-    model_name = _safe_model_name(handler.headers.get("X-Mirai-Model-Name"))
+    """Recebe e verifica um modelo ONNX ou pacote .mirai no dispositivo."""
+    artifact_name = _safe_artifact_name(
+        handler.headers.get("X-Mirai-Artifact-Name")
+        or handler.headers.get("X-Mirai-Model-Name")
+    )
+    artifact_suffix = Path(artifact_name).suffix.lower()
     expected_sha256 = handler.headers.get("X-Mirai-SHA256", "").lower()
     if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
         raise AgentRequestError(
             HTTPStatus.BAD_REQUEST,
             "cabeçalho X-Mirai-SHA256 ausente ou inválido",
         )
-    content_length = _content_length(handler)
+    content_length = _content_length(handler, artifact_suffix)
     digest = hashlib.sha256()
     temporary_path: Path | None = None
+    temporary_model_path: Path | None = None
 
     try:
         with tempfile.NamedTemporaryFile(
-            dir=state.models_dir,
+            dir=state.data_dir,
             prefix=".upload-",
-            suffix=".onnx",
+            suffix=artifact_suffix,
             delete=False,
         ) as temporary_file:
             temporary_path = Path(temporary_file.name)
@@ -761,28 +795,95 @@ def receive_deployment(
         if actual_sha256 != expected_sha256:
             raise AgentRequestError(
                 HTTPStatus.BAD_REQUEST,
-                "SHA-256 do modelo não confere",
+                "SHA-256 do artefato não confere",
             )
 
-        validate_model(temporary_path)
+        package_file_name: str | None = None
+        contract: dict[str, Any] | None = None
+        package_metadata: dict[str, Any] | None = None
+        if artifact_suffix == MIRAI_EXTENSION:
+            package = load_mirai_package(temporary_path)
+            manifest = package.manifest
+            with tempfile.NamedTemporaryFile(
+                dir=state.models_dir,
+                prefix=".package-model-",
+                suffix=".onnx",
+                delete=False,
+            ) as temporary_model:
+                temporary_model_path = Path(temporary_model.name)
+            extract_mirai_model(package, temporary_model_path)
+            model_path = temporary_model_path
+            model_name = package.model_name
+            model_sha256 = str(manifest["model"]["sha256"])
+            model_size_bytes = int(manifest["model"]["size_bytes"])
+            contract = {
+                "inputs": manifest["inputs"],
+                "outputs": manifest["outputs"],
+            }
+            package_metadata = {
+                "name": package.name,
+                "version": package.version,
+                "format": manifest["format"],
+                "format_version": manifest["format_version"],
+                "description": manifest.get("description"),
+            }
+        else:
+            model_path = temporary_path
+            model_name = artifact_name
+            model_sha256 = actual_sha256
+            model_size_bytes = content_length
+
+        validate_model(model_path)
         ort, _ = load_runtime_dependencies()
-        session = create_session(temporary_path, ort)
+        session = create_session(model_path, ort)
+        if contract is not None:
+            validate_runtime_contract(
+                manifest,
+                session.get_inputs(),
+                session.get_outputs(),
+            )
         providers = session.get_providers()
         del session
 
         deployment_id = actual_sha256[:16]
         target_path = state.models_dir / f"{deployment_id}-{model_name}"
-        os.replace(temporary_path, target_path)
-        temporary_path = None
+        if artifact_suffix == MIRAI_EXTENSION:
+            if temporary_model_path is None:
+                raise MiraiRuntimeError(
+                    "modelo temporário do pacote não foi preparado"
+                )
+            os.replace(temporary_model_path, target_path)
+            temporary_model_path = None
+            package_target = (
+                state.packages_dir / f"{deployment_id}-{artifact_name}"
+            )
+            os.replace(temporary_path, package_target)
+            temporary_path = None
+            package_file_name = package_target.name
+        else:
+            os.replace(temporary_path, target_path)
+            temporary_path = None
 
         deployment_data = {
             "status": "ready",
             "deployment_id": deployment_id,
             "model": model_name,
+            "artifact_name": artifact_name,
+            "artifact_type": (
+                "mirai" if artifact_suffix == MIRAI_EXTENSION else "onnx"
+            ),
             "sha256": actual_sha256,
             "size_bytes": content_length,
+            "model_sha256": model_sha256,
+            "model_size_bytes": model_size_bytes,
             "providers": providers,
         }
+        if package_metadata is not None:
+            deployment_data["package"] = package_metadata
+        if contract is not None:
+            deployment_data["contract"] = contract
+        if package_file_name is not None:
+            deployment_data["package_file_name"] = package_file_name
         deployment = state.register_deployment(
             deployment_data,
             target_path.name,
@@ -792,6 +893,8 @@ def receive_deployment(
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+        if temporary_model_path is not None:
+            temporary_model_path.unlink(missing_ok=True)
 
 
 def activate_deployment(
@@ -825,9 +928,26 @@ def receive_inference(
         )
 
     deployment, model_path = state.active_deployment(expected_model)
+    contract = deployment.get("contract")
+    preprocessing = None
+    if isinstance(contract, dict):
+        inputs = contract.get("inputs")
+        if isinstance(inputs, list):
+            preprocessing = {
+                str(item["name"]): dict(item["preprocessing"])
+                for item in inputs
+                if isinstance(item, dict)
+                and "name" in item
+                and isinstance(item.get("preprocessing"), dict)
+            }
     started_at = perf_counter()
     try:
-        result, latency_ms = run_model(model_path, input_specs, layout)
+        result, latency_ms = run_model(
+            model_path,
+            input_specs,
+            layout,
+            preprocessing,
+        )
     except MiraiRuntimeError as error:
         state.append_event(
             {

@@ -5,6 +5,45 @@ Todas as mudanças relevantes do MiraiOS serão documentadas neste arquivo.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e
 o projeto utiliza [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.9.0] - 2026-07-29
+
+### Adicionado
+
+- formato público `.mirai` v1 com `manifest.json` e modelo ONNX;
+- comando `mirai pack` com nome, SemVer, descrição e saída configurável;
+- contrato de entradas e saídas capturado diretamente do ONNX Runtime;
+- perfis declarativos `tensor` e `image` com layout, escala, mean e std;
+- suporte a `.mirai` em `validate`, `info`, `run`, `benchmark` e `deploy`;
+- armazenamento do pacote original e do modelo extraído no Mirai Agent;
+- metadados do pacote, contrato e hashes separados no lifecycle;
+- especificação e critérios de validação em `docs/hikari-v0.9.md`.
+
+### Segurança
+
+- schema do manifesto é estrito e rejeita campos ou chaves JSON duplicadas;
+- pacotes recusam membros extras ou duplicados, links, criptografia e
+  compressão;
+- manifesto, modelo e pacote possuem limites explícitos de tamanho;
+- SHA-256 interno é verificado antes de carregar o modelo;
+- contrato declarado é comparado às entradas e saídas reais do runtime;
+- nomes e versões são validados antes de formar caminhos de saída;
+- arquivos temporários usam nomes exclusivos e extração para caminho
+  controlado.
+
+### Alterado
+
+- o Agent aceita ONNX e `.mirai` pelo mesmo endpoint de deployments;
+- o README e a demonstração visual agora apresentam o fluxo do Mirai Package;
+- a versão do projeto passou para `0.9.0`.
+
+### Compatibilidade
+
+- comandos, deploys e registros existentes com arquivos `.onnx` continuam
+  funcionando;
+- o formato `.mirai` usa uma versão própria para permitir evolução explícita;
+- a suíte foi ampliada para cobrir reprodução byte a byte, adulteração,
+  contrato, CLI e deploy completo no Agent.
+
 ## [0.8.0] - 2026-07-28
 
 ### Adicionado
@@ -123,3 +162,4 @@ o projeto utiliza [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 [0.6.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.5.1...v0.6.0
 [0.7.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.6.0...v0.7.0
 [0.8.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.7.0...v0.8.0
+[0.9.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.8.0...v0.9.0

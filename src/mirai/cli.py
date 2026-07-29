@@ -27,7 +27,12 @@ from .benchmark import (
 )
 from .devices import add_device, get_device, load_devices, remove_device
 from .errors import MiraiRuntimeError
-from .inspect import show_model_info, validate_model
+from .inspect import show_artifact_info, validate_artifact
+from .package import (
+    MIRAI_EXTENSION,
+    create_mirai_package,
+    validate_package_metadata,
+)
 from .runtime import run_model
 
 
@@ -107,17 +112,78 @@ def build_parser() -> argparse.ArgumentParser:
         help="confirma a inicialização do ambiente do Projeto Hikari",
     )
 
+    pack_parser = subparsers.add_parser(
+        "pack",
+        help="cria um pacote .mirai reproduzível",
+    )
+    pack_parser.add_argument("model_path", type=Path, metavar="MODELO_ONNX")
+    pack_parser.add_argument(
+        "--name",
+        required=True,
+        metavar="NOME",
+        help="identificador minúsculo do pacote",
+    )
+    pack_parser.add_argument(
+        "--package-version",
+        required=True,
+        metavar="SEMVER",
+        help="versão do modelo no formato SemVer (ex.: 1.0.0)",
+    )
+    pack_parser.add_argument(
+        "--output",
+        type=Path,
+        metavar="ARQUIVO",
+        help="destino .mirai (padrão: NOME-VERSÃO.mirai)",
+    )
+    pack_parser.add_argument(
+        "--description",
+        metavar="TEXTO",
+        help="descrição curta incluída no manifesto",
+    )
+    pack_parser.add_argument(
+        "--image-input",
+        metavar="ENTRADA",
+        help="entrada que receberá imagens",
+    )
+    pack_parser.add_argument(
+        "--layout",
+        choices=("auto", "nchw", "nhwc"),
+        default="auto",
+        help="layout da entrada de imagem (padrão: auto)",
+    )
+    pack_parser.add_argument(
+        "--scale",
+        type=float,
+        metavar="NÚMERO",
+        help="escala positiva dos pixels (padrão float: 1/255)",
+    )
+    pack_parser.add_argument(
+        "--mean",
+        metavar="JSON",
+        help="média por canal, como [0.485, 0.456, 0.406]",
+    )
+    pack_parser.add_argument(
+        "--std",
+        metavar="JSON",
+        help="desvio por canal, como [0.229, 0.224, 0.225]",
+    )
+    pack_parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="substitui o arquivo de saída quando ele já existe",
+    )
+
     validate_parser = subparsers.add_parser(
         "validate",
-        help="valida integralmente um modelo ONNX",
+        help="valida integralmente um modelo ONNX ou pacote .mirai",
     )
-    validate_parser.add_argument("model_path", type=Path, metavar="ARQUIVO")
+    validate_parser.add_argument("artifact_path", type=Path, metavar="ARQUIVO")
 
     info_parser = subparsers.add_parser(
         "info",
-        help="exibe entradas, saídas, tipos, shapes e nós do modelo",
+        help="inspeciona modelo ONNX ou manifesto .mirai",
     )
-    info_parser.add_argument("model_path", type=Path, metavar="ARQUIVO")
+    info_parser.add_argument("artifact_path", type=Path, metavar="ARQUIVO")
 
     run_parser = subparsers.add_parser(
         "run",
@@ -241,9 +307,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     deploy_parser = subparsers.add_parser(
         "deploy",
-        help="valida e envia um modelo ONNX para um dispositivo",
+        help="valida e envia um ONNX ou pacote .mirai",
     )
-    deploy_parser.add_argument("model_path", type=Path, metavar="ARQUIVO")
+    deploy_parser.add_argument("artifact_path", type=Path, metavar="ARQUIVO")
     deploy_parser.add_argument(
         "--device",
         required=True,
@@ -360,16 +426,55 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("[MiraiOS] Ambiente do Projeto Hikari pronto.")
             return 0
 
-        if args.command == "validate":
-            size_kb = validate_model(args.model_path)
+        if args.command == "pack":
+            validate_package_metadata(
+                args.name,
+                args.package_version,
+                args.description,
+            )
+            output_path = args.output or Path(
+                f"{args.name}-{args.package_version}{MIRAI_EXTENSION}"
+            )
+            package = create_mirai_package(
+                args.model_path,
+                output_path,
+                name=args.name,
+                package_version=args.package_version,
+                description=args.description,
+                image_input=args.image_input,
+                layout=args.layout,
+                scale=args.scale,
+                mean=args.mean,
+                std=args.std,
+                replace=args.replace,
+            )
             print(
-                f"[MiraiOS] Modelo ONNX válido: {args.model_path.name} "
-                f"({size_kb:.2f} KB)"
+                f"[MiraiOS] Pacote criado: {package.path} "
+                f"({package.name} v{package.version})"
+            )
+            print(f"[MiraiOS] SHA-256: {package.sha256}")
+            print(
+                "[MiraiOS] Modelo: "
+                f"{package.model_name} "
+                f"({package.manifest['model']['sha256']})"
+            )
+            return 0
+
+        if args.command == "validate":
+            size_kb = validate_artifact(args.artifact_path)
+            artifact_type = (
+                "Pacote .mirai"
+                if args.artifact_path.suffix.lower() == MIRAI_EXTENSION
+                else "Modelo ONNX"
+            )
+            print(
+                f"[MiraiOS] {artifact_type} válido: "
+                f"{args.artifact_path.name} ({size_kb:.2f} KB)"
             )
             return 0
 
         if args.command == "info":
-            show_model_info(args.model_path)
+            show_artifact_info(args.artifact_path)
             return 0
 
         if args.command == "run":
@@ -520,15 +625,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "deploy":
             device = get_device(args.device_name)
             print(
-                f"[MiraiOS] Enviando {args.model_path.name} "
+                f"[MiraiOS] Enviando {args.artifact_path.name} "
                 f"para {device.name}..."
             )
-            deployment = deploy_model(device, args.model_path)
+            deployment = deploy_model(device, args.artifact_path)
             print(
                 "[MiraiOS] Deployment pronto: "
                 f"{deployment['deployment_id']}"
             )
             print(f"[MiraiOS] SHA-256: {deployment['sha256']}")
+            package = deployment.get("package")
+            if isinstance(package, dict):
+                print(
+                    "[MiraiOS] Pacote: "
+                    f"{package.get('name')} v{package.get('version')}"
+                )
             providers = deployment.get("providers") or []
             if providers:
                 print(f"[MiraiOS] Providers: {', '.join(providers)}")
@@ -559,10 +670,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 marker = "●" if deployment["deployment_id"] == active_id else "○"
                 providers = ", ".join(deployment.get("providers") or [])
                 provider_suffix = f" | {providers}" if providers else ""
+                package = deployment.get("package")
+                package_suffix = (
+                    f" | {package.get('name')} v{package.get('version')}"
+                    if isinstance(package, dict)
+                    else ""
+                )
                 print(
                     f"{marker} {deployment['deployment_id']} | "
                     f"{deployment['model']} | {deployment['status']}"
-                    f"{provider_suffix}"
+                    f"{package_suffix}{provider_suffix}"
                 )
             return 0
 
