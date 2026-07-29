@@ -117,7 +117,7 @@ def render_hero() -> None:
         fill="#173557",
     )
 
-    rounded_label(canvas, (626, 112), "PROJECT HIKARI  •  v0.8")
+    rounded_label(canvas, (626, 112), "PROJECT HIKARI  •  v0.9")
 
     title_font = font("DejaVuSans-Bold.ttf", 104)
     title_y = 188
@@ -140,7 +140,7 @@ def render_hero() -> None:
     body_font = font("DejaVuSans.ttf", 26)
     draw.text(
         (630, 392),
-        "Deploy, execução e observabilidade para Edge AI.",
+        "Pacotes verificáveis, deploy e execução para Edge AI.",
         font=body_font,
         fill=MUTED,
     )
@@ -152,7 +152,7 @@ def render_hero() -> None:
     )
 
     label_x = 630
-    for label in ("PAIR", "SECURE", "DEPLOY", "RUN"):
+    for label in ("PACK", "VERIFY", "DEPLOY", "RUN"):
         rounded_label(
             canvas,
             (label_x, 502),
@@ -216,59 +216,59 @@ def terminal_frame(
 
     header_font = font("DejaVuSans-Bold.ttf", 20)
     draw.text(
-        (455, 67),
-        "MiraiOS v0.8  •  Hikari Link",
+        (430, 67),
+        "MiraiOS v0.9  •  Mirai Package",
         font=header_font,
         fill="#C7D6EB",
     )
 
     lines: list[tuple[str, str]] = [
         (
-            "$ mirai agent start --host 0.0.0.0",
+            "$ mirai pack examples/dummy_model.onnx \\",
             CYAN,
         ),
         (
-            "[MiraiOS] HTTPS • código e fingerprint exibidos",
+            "  --name dummy --package-version 1.0.0",
             MUTED,
         ),
         (
-            "$ mirai device pair edge --url https://192.168.1.40:8080 \\",
+            "[MiraiOS] Pacote criado: dummy-1.0.0.mirai",
+            GREEN,
+        ),
+        (
+            "[MiraiOS] SHA-256: 8d21… verificável",
+            GREEN,
+        ),
+        (
+            "$ mirai validate dummy-1.0.0.mirai",
             CYAN,
         ),
         (
-            "  --code <CÓDIGO> --fingerprint <SHA-256>",
-            MUTED,
-        ),
-        (
-            "[MiraiOS] Dispositivo pareado: edge",
+            "[MiraiOS] Pacote .mirai válido",
             GREEN,
         ),
         (
-            "$ mirai doctor --device edge",
+            "$ mirai deploy dummy-1.0.0.mirai --device edge",
             CYAN,
         ),
         (
-            "✓ Canal: HTTPS com fingerprint fixado",
+            "[MiraiOS] Pacote: dummy v1.0.0",
             GREEN,
         ),
         (
-            "✓ Autenticação: token pareado",
+            "[MiraiOS] Deployment pronto: 8d21e69b78247d0a",
             GREEN,
         ),
         (
-            "$ mirai deploy examples/dummy_model.onnx --device edge",
+            "$ mirai activate 8d21e69b78247d0a --device edge",
             CYAN,
-        ),
-        (
-            "[MiraiOS] Deployment pronto: 153f2947c78a0313",
-            GREEN,
         ),
         (
             "$ mirai run --device edge --input 5.0",
             CYAN,
         ),
         (
-            "[MiraiOS] Resultado: 6.0 • acesso revogável",
+            "[MiraiOS] Resultado: 6.0 • contrato preservado",
             GREEN,
         ),
     ]
@@ -292,7 +292,7 @@ def terminal_frame(
         )
 
     footer_font = font("DejaVuSans-Bold.ttf", 16)
-    footer = "LOCAL-FIRST   •   ONNX   •   OPEN SOURCE"
+    footer = "LOCAL-FIRST   •   ONNX   •   VERIFIED PACKAGE"
     footer_width = draw.textlength(footer, font=footer_font)
     draw.text(
         ((width - footer_width) / 2, 632),

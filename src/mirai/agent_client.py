@@ -21,7 +21,8 @@ from .devices import (
     normalize_device_name,
 )
 from .errors import MiraiRuntimeError
-from .inspect import ensure_model_path, validate_model
+from .inspect import validate_artifact
+from .package import MIRAI_EXTENSION, MIRAI_MEDIA_TYPE, calculate_sha256
 from .security import normalize_fingerprint
 
 
@@ -312,45 +313,41 @@ def run_remote_model(
     )
 
 
-def calculate_sha256(path: Path) -> str:
-    """Calcula SHA-256 sem carregar o arquivo inteiro em memória."""
-    digest = hashlib.sha256()
-    with path.open("rb") as model_file:
-        for chunk in iter(lambda: model_file.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def deploy_model(device: Device, model_path: Path) -> dict[str, Any]:
-    """Valida e envia um modelo ao Agent usando um corpo binário."""
-    ensure_model_path(model_path)
-    validate_model(model_path)
-    model_size = model_path.stat().st_size
-    model_sha256 = calculate_sha256(model_path)
+def deploy_model(device: Device, artifact_path: Path) -> dict[str, Any]:
+    """Valida e envia um ONNX ou pacote .mirai usando um corpo binário."""
+    validate_artifact(artifact_path)
+    artifact_size = artifact_path.stat().st_size
+    artifact_sha256 = calculate_sha256(artifact_path)
+    is_package = artifact_path.suffix.lower() == MIRAI_EXTENSION
     connection: http.client.HTTPConnection | None = None
     headers = {
         "Accept": "application/json",
-        "Content-Type": "application/octet-stream",
-        "Content-Length": str(model_size),
-        "X-Mirai-Model-Name": model_path.name,
-        "X-Mirai-SHA256": model_sha256,
+        "Content-Type": (
+            MIRAI_MEDIA_TYPE if is_package else "application/octet-stream"
+        ),
+        "Content-Length": str(artifact_size),
+        "X-Mirai-SHA256": artifact_sha256,
     }
+    if is_package:
+        headers["X-Mirai-Artifact-Name"] = artifact_path.name
+    else:
+        headers["X-Mirai-Model-Name"] = artifact_path.name
     if device.token:
         headers["Authorization"] = f"Bearer {device.token}"
 
     try:
         connection, prefix = _connection(device)
-        with model_path.open("rb") as model_file:
+        with artifact_path.open("rb") as artifact_file:
             connection.request(
                 "POST",
                 f"{prefix}/v1/deployments",
-                body=model_file,
+                body=artifact_file,
                 headers=headers,
             )
             return _decode_response(device, connection.getresponse())
     except (OSError, TimeoutError, http.client.HTTPException) as error:
         raise MiraiRuntimeError(
-            f"falha ao enviar o modelo para o Agent '{device.name}'"
+            f"falha ao enviar o artefato para o Agent '{device.name}'"
         ) from error
     finally:
         if connection is not None:

@@ -146,6 +146,7 @@ def process_image_input(
     input_meta: Any,
     np: Any,
     layout: str = "auto",
+    preprocessing: dict[str, Any] | None = None,
 ) -> Any:
     """Carrega uma imagem respeitando layout, dtype e shape do modelo."""
     try:
@@ -159,7 +160,11 @@ def process_image_input(
         raise MiraiRuntimeError(f"imagem de entrada não encontrada: {image_path}")
 
     shape = list(input_meta.shape)
-    resolved_layout = detect_image_layout(shape, layout)
+    resolved_layout = (
+        str(preprocessing["layout"])
+        if preprocessing is not None
+        else detect_image_layout(shape, layout)
+    )
     if resolved_layout == "nchw":
         batch, channels, target_h, target_w = shape
     else:
@@ -192,7 +197,18 @@ def process_image_input(
 
     dtype = numpy_dtype(input_meta.type, np)
     array = array.astype(dtype, copy=False)
-    if np.issubdtype(dtype, np.floating):
+    if preprocessing is not None:
+        if preprocessing.get("kind") != "image":
+            raise MiraiRuntimeError(
+                f"entrada '{input_meta.name}' não aceita imagens "
+                "segundo o manifesto"
+            )
+        if np.issubdtype(dtype, np.floating):
+            scale = np.asarray(preprocessing["scale"], dtype=dtype)
+            mean = np.asarray(preprocessing["mean"], dtype=dtype)
+            std = np.asarray(preprocessing["std"], dtype=dtype)
+            array = (array * scale - mean) / std
+    elif np.issubdtype(dtype, np.floating):
         array = array / np.asarray(255.0, dtype=dtype)
 
     if resolved_layout == "nchw":
@@ -267,6 +283,7 @@ def build_input_feed(
     input_specs: list[str] | None,
     np: Any,
     layout: str = "auto",
+    preprocessing: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Monta o dicionário de tensores consumido pelo ONNX Runtime."""
     values = resolve_input_specs(model_inputs, input_specs)
@@ -275,14 +292,25 @@ def build_input_feed(
     for input_meta in model_inputs:
         raw_value = values[input_meta.name]
         possible_image = Path(raw_value)
+        profile = (
+            preprocessing.get(input_meta.name)
+            if preprocessing is not None
+            else None
+        )
         if possible_image.suffix.lower() in IMAGE_EXTENSIONS:
             feed[input_meta.name] = process_image_input(
                 possible_image,
                 input_meta,
                 np,
                 layout,
+                profile,
             )
         else:
+            if profile is not None and profile.get("kind") == "image":
+                raise MiraiRuntimeError(
+                    f"entrada '{input_meta.name}' exige uma imagem "
+                    "segundo o manifesto"
+                )
             feed[input_meta.name] = process_numeric_input(
                 raw_value,
                 input_meta,

@@ -9,6 +9,11 @@ from typing import Any
 from .errors import MiraiRuntimeError
 from .inputs import build_input_feed
 from .inspect import ensure_model_path
+from .package import (
+    materialize_model_artifact,
+    preprocessing_from_manifest,
+    validate_runtime_contract,
+)
 
 
 def load_runtime_dependencies() -> tuple[Any, Any]:
@@ -46,16 +51,33 @@ def prepare_inference(
     model_path: Path,
     input_specs: list[str] | None = None,
     layout: str = "auto",
+    preprocessing: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Cria a sessão e prepara todas as entradas do modelo."""
     ort, np = load_runtime_dependencies()
-    session = create_session(model_path, ort)
-    input_feed = build_input_feed(
-        session.get_inputs(),
-        input_specs,
-        np,
-        layout,
-    )
+    with materialize_model_artifact(model_path) as (
+        resolved_model_path,
+        manifest,
+    ):
+        session = create_session(resolved_model_path, ort)
+        if manifest is not None:
+            validate_runtime_contract(
+                manifest,
+                session.get_inputs(),
+                session.get_outputs(),
+            )
+        declared_preprocessing = (
+            preprocessing
+            if preprocessing is not None
+            else preprocessing_from_manifest(manifest)
+        )
+        input_feed = build_input_feed(
+            session.get_inputs(),
+            input_specs,
+            np,
+            layout,
+            declared_preprocessing,
+        )
     return session, input_feed
 
 
@@ -100,8 +122,14 @@ def run_model(
     model_path: Path,
     input_specs: list[str] | None = None,
     layout: str = "auto",
+    preprocessing: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[object, float]:
     """Prepara e executa uma inferência local."""
-    session, input_feed = prepare_inference(model_path, input_specs, layout)
+    session, input_feed = prepare_inference(
+        model_path,
+        input_specs,
+        layout,
+        preprocessing,
+    )
     outputs, elapsed_ms = execute_inference(session, input_feed)
     return normalize_inference_result(outputs), elapsed_ms

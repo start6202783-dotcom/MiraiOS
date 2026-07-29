@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "miraios"
-version = "0.8.0"
+version = "0.9.0"
 description = "Deploy seguro e inferência ONNX em dispositivos Edge AI"
 readme = "README.md"
 requires-python = ">=3.10"

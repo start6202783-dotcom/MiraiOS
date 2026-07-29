@@ -61,6 +61,12 @@ mirai validate examples/dummy_model.onnx
 mirai info examples/dummy_model.onnx
 mirai run examples/dummy_model.onnx --input 5
 mirai benchmark examples/dummy_model.onnx --runs 10 --warmup 2
+mirai pack examples/dummy_model.onnx \
+  --name dummy \
+  --package-version 1.0.0 \
+  --output /tmp/dummy-1.0.0.mirai
+mirai validate /tmp/dummy-1.0.0.mirai
+mirai run /tmp/dummy-1.0.0.mirai --input 5
 ```
 
 ## Padrões do projeto
@@ -69,6 +75,7 @@ mirai benchmark examples/dummy_model.onnx --runs 10 --warmup 2
 - Mantenha mensagens de terminal objetivas e acionáveis.
 - Adicione testes para correções e novos comportamentos.
 - Não esconda limitações específicas de modelo ou hardware.
+- Preserve compatibilidade de leitura do formato `.mirai` v1.
 - Prefira funções pequenas e módulos com responsabilidade clara.
 - Atualize README e CHANGELOG quando o comportamento público mudar.
 

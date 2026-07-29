@@ -66,6 +66,32 @@ def validate_model(model_path: Path) -> float:
         raise MiraiRuntimeError(f"modelo ONNX inválido: {error}") from error
 
 
+def validate_artifact(artifact_path: Path) -> float:
+    """Valida um modelo ONNX ou um pacote .mirai completo."""
+    from .package import (
+        MIRAI_EXTENSION,
+        materialize_model_artifact,
+        validate_runtime_contract,
+    )
+    from .runtime import create_session, load_runtime_dependencies
+
+    if artifact_path.suffix.lower() != MIRAI_EXTENSION:
+        return validate_model(artifact_path)
+    with materialize_model_artifact(artifact_path) as (model_path, manifest):
+        validate_model(model_path)
+        ort, _ = load_runtime_dependencies()
+        session = create_session(model_path, ort)
+        if manifest is None:
+            raise MiraiRuntimeError("manifesto ausente no pacote .mirai")
+        validate_runtime_contract(
+            manifest,
+            session.get_inputs(),
+            session.get_outputs(),
+        )
+        del session
+    return artifact_path.stat().st_size / BYTES_PER_KB
+
+
 def describe_value_info(value_info: Any, onnx: Any) -> tuple[str, str]:
     """Formata shape e tipo de uma entrada ou saída ONNX."""
     if not value_info.type.HasField("tensor_type"):
@@ -116,3 +142,71 @@ def show_model_info(model_path: Path) -> None:
     print_value_info_section("Entradas", model.graph.input, onnx)
     print_value_info_section("Saídas", model.graph.output, onnx)
     print(f"[MiraiOS] Total de nós: {len(model.graph.node)}")
+
+
+def show_artifact_info(artifact_path: Path) -> None:
+    """Exibe informações de um ONNX ou do contrato de um pacote .mirai."""
+    import tempfile
+
+    from .package import (
+        MIRAI_EXTENSION,
+        extract_mirai_model,
+        load_mirai_package,
+        validate_runtime_contract,
+    )
+    from .runtime import create_session, load_runtime_dependencies
+
+    if artifact_path.suffix.lower() != MIRAI_EXTENSION:
+        show_model_info(artifact_path)
+        return
+
+    package = load_mirai_package(artifact_path)
+    manifest = package.manifest
+    with tempfile.TemporaryDirectory(prefix="mirai-info-") as directory:
+        model_path = Path(directory) / "model.onnx"
+        extract_mirai_model(package, model_path)
+        validate_model(model_path)
+        ort, _ = load_runtime_dependencies()
+        session = create_session(model_path, ort)
+        validate_runtime_contract(
+            manifest,
+            session.get_inputs(),
+            session.get_outputs(),
+        )
+        del session
+
+        _print_package_info(package)
+        show_model_info(model_path)
+
+
+def _print_package_info(package: Any) -> None:
+    """Exibe o manifesto de um pacote já validado."""
+    manifest = package.manifest
+    print(f"[MiraiOS] Pacote: {manifest['name']} v{manifest['version']}")
+    print(f"[MiraiOS] Formato: {manifest['format']} v{manifest['format_version']}")
+    print(f"[MiraiOS] Runtime: {manifest['runtime']}")
+    print(f"[MiraiOS] Artefato SHA-256: {package.sha256}")
+    print(f"[MiraiOS] Modelo: {manifest['model']['source_name']}")
+    print(f"[MiraiOS] Modelo SHA-256: {manifest['model']['sha256']}")
+    description = manifest.get("description")
+    if description:
+        print(f"[MiraiOS] Descrição: {description}")
+    print("[MiraiOS] Contrato de entradas:")
+    for item in manifest["inputs"]:
+        preprocessing = item["preprocessing"]
+        preparation = str(preprocessing["kind"])
+        if preprocessing["kind"] == "image":
+            preparation = (
+                f"image/{preprocessing['layout']} "
+                f"scale={preprocessing['scale']}"
+            )
+        print(
+            f"[MiraiOS]   - {item['name']}: {item['type']} "
+            f"{item['shape']} ({preparation})"
+        )
+    print("[MiraiOS] Contrato de saídas:")
+    for item in manifest["outputs"]:
+        print(
+            f"[MiraiOS]   - {item['name']}: "
+            f"{item['type']} {item['shape']}"
+        )
