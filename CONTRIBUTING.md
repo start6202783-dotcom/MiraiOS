@@ -14,6 +14,8 @@ Pesquise as issues existentes. Ao relatar um bug, inclua:
 - modelo mínimo ou metadados de entradas e saídas, quando possível.
 
 Não publique modelos, dados ou credenciais confidenciais.
+Vulnerabilidades devem seguir [SECURITY.md](SECURITY.md), sem detalhes em
+issues públicas.
 
 ## Ambiente de desenvolvimento
 
@@ -75,6 +77,8 @@ mirai run /tmp/dummy-1.0.0.mirai --input 5
 - Mantenha mensagens de terminal objetivas e acionáveis.
 - Adicione testes para correções e novos comportamentos.
 - Não esconda limitações específicas de modelo ou hardware.
+- Não marque hardware como validado sem um teste em runner ou dispositivo da
+  arquitetura correspondente.
 - Preserve compatibilidade de leitura do formato `.mirai` v1.
 - Prefira funções pequenas e módulos com responsabilidade clara.
 - Atualize README e CHANGELOG quando o comportamento público mudar.
@@ -97,5 +101,6 @@ O Pull Request deve explicar:
 - limitações conhecidas;
 - comandos usados para validar.
 
-O CI executará a suíte em Python 3.10, 3.11, 3.12 e 3.13. Aguarde todos os
-checks antes de solicitar a revisão final.
+O CI executará a suíte em Python 3.10, 3.11, 3.12 e 3.13 e repetirá todos os
+testes em um runner Linux ARM64. Aguarde todos os checks antes de solicitar a
+revisão final.

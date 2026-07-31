@@ -10,6 +10,7 @@ from .errors import MiraiRuntimeError
 
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+NUMPY_EXTENSIONS = {".npy"}
 DEFAULT_INPUT_VALUE = "1.0"
 DEFAULT_IMAGE_SIZE = 224
 
@@ -110,6 +111,27 @@ def process_numeric_input(value: str, input_meta: Any, np: Any) -> Any:
         if array.size == expected_size:
             array = array.reshape(resolved)
 
+    _validate_tensor_shape(array, input_meta)
+    return array
+
+
+def process_numpy_input(path: Path, input_meta: Any, np: Any) -> Any:
+    """Carrega um tensor NPY sem permitir desserialização de objetos Python."""
+    if not path.is_file():
+        raise MiraiRuntimeError(f"arquivo NPY não encontrado: {path}")
+    try:
+        array = np.load(path, allow_pickle=False)
+    except (OSError, ValueError) as error:
+        raise MiraiRuntimeError(f"arquivo NPY inválido ou inseguro: {error}") from error
+    if array.dtype.hasobject:
+        raise MiraiRuntimeError("arquivos NPY com objetos não são permitidos")
+    expected_dtype = numpy_dtype(input_meta.type, np)
+    try:
+        array = np.asarray(array, dtype=expected_dtype)
+    except (TypeError, ValueError) as error:
+        raise MiraiRuntimeError(
+            f"tensor NPY incompatível com '{input_meta.name}': {error}"
+        ) from error
     _validate_tensor_shape(array, input_meta)
     return array
 
@@ -304,6 +326,16 @@ def build_input_feed(
                 np,
                 layout,
                 profile,
+            )
+        elif possible_image.suffix.lower() in NUMPY_EXTENSIONS:
+            if profile is not None and profile.get("kind") == "image":
+                raise MiraiRuntimeError(
+                    f"entrada '{input_meta.name}' exige uma imagem segundo o manifesto"
+                )
+            feed[input_meta.name] = process_numpy_input(
+                possible_image,
+                input_meta,
+                np,
             )
         else:
             if profile is not None and profile.get("kind") == "image":

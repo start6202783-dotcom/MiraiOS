@@ -7,10 +7,12 @@ import json
 import os
 import platform
 import re
+import socket
 import ssl
 import sys
 import tempfile
 import threading
+import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
 from http import HTTPStatus
@@ -21,8 +23,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from . import __version__
+from .attachments import materialize_remote_inputs
 from .errors import MiraiRuntimeError
-from .inputs import IMAGE_EXTENSIONS
+from .discovery import AgentAdvertiser
 from .inspect import validate_model
 from .package import (
     MAX_MODEL_SIZE_BYTES,
@@ -33,17 +36,21 @@ from .package import (
     validate_runtime_contract,
 )
 from .runtime import create_session, load_runtime_dependencies, run_model
+from .providers import hardware_profile, normalize_provider_profile
 from .security import (
+    ACCESS_ROLES,
     AgentSecurity,
     AuthenticationDenied,
     PairingDenied,
+    PairingRateLimited,
     format_fingerprint,
     is_loopback_host,
+    role_allows,
 )
 
 
 MAX_ARTIFACT_SIZE_BYTES = MAX_PACKAGE_SIZE_BYTES
-MAX_JSON_BODY_BYTES = 1024 * 1024
+MAX_JSON_BODY_BYTES = 14 * 1024 * 1024
 DEPLOYMENT_REGISTRY_VERSION = 1
 SAFE_MODEL_NAME_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 DEPLOYMENT_ID_PATTERN = re.compile(r"^[0-9a-f]{16}$")
@@ -78,6 +85,7 @@ class AgentState:
         *,
         secure: bool = False,
         security_clock: Callable[[], datetime] | None = None,
+        pairing_role: str = "admin",
     ) -> None:
         self.data_dir = data_dir.expanduser().resolve()
         self.models_dir = self.data_dir / "models"
@@ -88,7 +96,10 @@ class AgentState:
         self._deployments_lock = threading.Lock()
         self.models_dir.mkdir(parents=True, exist_ok=True)
         self.packages_dir.mkdir(parents=True, exist_ok=True)
-        security_options: dict[str, Any] = {"secure": secure}
+        security_options: dict[str, Any] = {
+            "secure": secure,
+            "pairing_role": pairing_role,
+        }
         if security_clock is not None:
             security_options["clock"] = security_clock
         self.security = AgentSecurity(
@@ -325,6 +336,83 @@ class AgentState:
                 )
             return _public_deployment(deployment), model_path
 
+    @staticmethod
+    def _stored_path(directory: Path, file_name: Any) -> Path | None:
+        if file_name is None:
+            return None
+        if not isinstance(file_name, str) or Path(file_name).name != file_name:
+            raise MiraiRuntimeError("deployment contém um nome de arquivo inseguro")
+        candidate = (directory / file_name).resolve()
+        if candidate.parent != directory.resolve():
+            raise MiraiRuntimeError("deployment aponta para fora do armazenamento")
+        return candidate
+
+    def delete_deployment(self, deployment_id: str) -> dict[str, Any]:
+        """Exclui um deployment inativo com rollback da operação de arquivos."""
+        if not DEPLOYMENT_ID_PATTERN.fullmatch(deployment_id):
+            raise AgentRequestError(
+                HTTPStatus.BAD_REQUEST,
+                "identificador de deployment inválido",
+            )
+        with self._deployments_lock:
+            registry = self._load_registry_unlocked()
+            if registry.get("active_deployment_id") == deployment_id:
+                raise AgentRequestError(
+                    HTTPStatus.CONFLICT,
+                    "o deployment ativo não pode ser removido",
+                )
+            target = next(
+                (
+                    item
+                    for item in registry["deployments"]
+                    if item.get("deployment_id") == deployment_id
+                ),
+                None,
+            )
+            if target is None:
+                raise AgentRequestError(
+                    HTTPStatus.NOT_FOUND,
+                    f"deployment '{deployment_id}' não encontrado",
+                )
+            paths = [
+                path
+                for path in (
+                    self._stored_path(self.models_dir, target.get("file_name")),
+                    self._stored_path(
+                        self.packages_dir,
+                        target.get("package_file_name"),
+                    ),
+                )
+                if path is not None and path.exists()
+            ]
+            moved: list[tuple[Path, Path]] = []
+            try:
+                for path in paths:
+                    tombstone = path.with_name(
+                        f".{path.name}.delete-{uuid.uuid4().hex}"
+                    )
+                    os.replace(path, tombstone)
+                    moved.append((path, tombstone))
+                registry["deployments"] = [
+                    item
+                    for item in registry["deployments"]
+                    if item.get("deployment_id") != deployment_id
+                ]
+                self._save_registry_unlocked(registry)
+            except BaseException:
+                for original, tombstone in reversed(moved):
+                    if tombstone.exists():
+                        os.replace(tombstone, original)
+                raise
+            for _, tombstone in moved:
+                try:
+                    tombstone.unlink(missing_ok=True)
+                except OSError as error:
+                    raise MiraiRuntimeError(
+                        f"deployment removido, mas o tombstone não pôde ser apagado: {error}"
+                    ) from error
+            return _public_deployment(target)
+
 
 class MiraiAgentServer(ThreadingHTTPServer):
     """Servidor HTTP com estado explícito do Agent."""
@@ -394,7 +482,7 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
             return None
         return token.strip() or None
 
-    def _authorize(self) -> bool:
+    def _authorize(self, required_role: str = "viewer") -> bool:
         try:
             self.authenticated_client = (
                 self.server.state.security.authenticate(
@@ -425,6 +513,16 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
                 str(error),
             )
             return False
+        assert self.authenticated_client is not None
+        if not role_allows(
+            str(self.authenticated_client.get("role", "viewer")),
+            required_role,
+        ):
+            self._send_error(
+                HTTPStatus.FORBIDDEN,
+                f"a operação exige o papel '{required_role}'",
+            )
+            return False
         return True
 
     def do_GET(self) -> None:
@@ -446,7 +544,10 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if not self._authorize():
+        required_role = (
+            "admin" if request_url.path == "/v1/clients" else "viewer"
+        )
+        if not self._authorize(required_role):
             return
 
         if request_url.path == "/v1/info":
@@ -514,7 +615,7 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
             if request_path == "/v1/pair":
                 payload = receive_pairing(self, self.server.state)
                 status = HTTPStatus.CREATED
-            elif not self._authorize():
+            elif not self._authorize("operator"):
                 return
             elif request_path == "/v1/deployments":
                 payload = receive_deployment(self, self.server.state)
@@ -544,6 +645,12 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
         except AgentRequestError as error:
             self._send_error(error.status, str(error))
             return
+        except PairingRateLimited as error:
+            self._send_json(
+                HTTPStatus.TOO_MANY_REQUESTS,
+                {"error": str(error), "retry_after": error.retry_after},
+            )
+            return
         except PairingDenied as error:
             self._send_error(HTTPStatus.UNAUTHORIZED, str(error))
             return
@@ -559,13 +666,77 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
 
         self._send_json(status, payload)
 
-    def do_DELETE(self) -> None:
-        """Revoga o cliente autenticado quando solicitado."""
+    def do_PATCH(self) -> None:
+        """Altera papéis de acesso com uma credencial administrativa."""
         request_path = urlsplit(self.path).path
-        if request_path != "/v1/clients/self":
+        match = re.fullmatch(r"/v1/clients/([0-9a-f]{16})", request_path)
+        if match is None:
             self._send_error(HTTPStatus.NOT_FOUND, "endpoint não encontrado")
             return
-        if not self._authorize():
+        if not self._authorize("admin"):
+            return
+        try:
+            payload = _json_body(self)
+            if set(payload) != {"role"} or payload.get("role") not in ACCESS_ROLES:
+                raise AgentRequestError(
+                    HTTPStatus.BAD_REQUEST,
+                    f"'role' deve ser {', '.join(ACCESS_ROLES)}",
+                )
+            client = self.server.state.security.set_client_role(
+                match.group(1),
+                str(payload["role"]),
+            )
+            self.server.state.append_event(
+                {
+                    "type": "role_change",
+                    "status": "success",
+                    "client_id": client["client_id"],
+                    "role": client["role"],
+                    "actor_client_id": self.authenticated_client["client_id"],
+                }
+            )
+        except AgentRequestError as error:
+            self._send_error(error.status, str(error))
+            return
+        except MiraiRuntimeError as error:
+            self._send_error(HTTPStatus.UNPROCESSABLE_ENTITY, str(error))
+            return
+        self._send_json(HTTPStatus.OK, client)
+
+    def do_DELETE(self) -> None:
+        """Revoga clientes ou remove deployments inativos."""
+        request_path = urlsplit(self.path).path
+        deployment_match = re.fullmatch(
+            r"/v1/deployments/([0-9a-f]{16})",
+            request_path,
+        )
+        if request_path != "/v1/clients/self" and deployment_match is None:
+            self._send_error(HTTPStatus.NOT_FOUND, "endpoint não encontrado")
+            return
+        required_role = "operator" if deployment_match is not None else "viewer"
+        if not self._authorize(required_role):
+            return
+        if deployment_match is not None:
+            try:
+                deployment = self.server.state.delete_deployment(
+                    deployment_match.group(1)
+                )
+                self.server.state.append_event(
+                    {"type": "deployment_deleted", **deployment}
+                )
+            except AgentRequestError as error:
+                self._send_error(error.status, str(error))
+                return
+            except MiraiRuntimeError as error:
+                self._send_error(HTTPStatus.UNPROCESSABLE_ENTITY, str(error))
+                return
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "status": "deleted",
+                    "deployment_id": deployment["deployment_id"],
+                },
+            )
             return
         try:
             client = self.server.state.security.revoke(
@@ -604,18 +775,22 @@ def collect_device_info(state: AgentState | None = None) -> dict[str, Any]:
         providers = ort.get_available_providers()
     except MiraiRuntimeError:
         providers = []
+    machine = platform.machine()
+    system = platform.system()
     return {
         "agent_version": __version__,
         "agent_id": state.security.agent_id if state else None,
         "tls": state.security.secure if state else False,
         "hostname": platform.node() or "unknown",
-        "system": platform.system(),
+        "system": system,
         "release": platform.release(),
-        "machine": platform.machine(),
+        "machine": machine,
         "python": platform.python_version(),
         "cpu_count": os.cpu_count(),
         "memory_total_bytes": _memory_total_bytes(),
         "providers": providers,
+        "provider_profiles": list(("auto", "cpu", "cuda", "directml")),
+        "hardware_profile": hardware_profile(machine, system, providers),
     }
 
 
@@ -696,7 +871,7 @@ def _json_body(handler: MiraiAgentHandler) -> dict[str, Any]:
     if content_length > MAX_JSON_BODY_BYTES:
         raise AgentRequestError(
             HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-            "corpo JSON excede o limite de 1 MB",
+            "corpo JSON excede o limite de 14 MB",
         )
 
     raw_body = handler.rfile.read(content_length)
@@ -733,15 +908,6 @@ def _remote_input_specs(payload: dict[str, Any]) -> list[str] | None:
             "'inputs' deve ser uma lista de strings",
         )
 
-    for spec in input_specs:
-        _, separator, value = spec.partition("=")
-        raw_value = value if separator else spec
-        if Path(raw_value).suffix.lower() in IMAGE_EXTENSIONS:
-            raise AgentRequestError(
-                HTTPStatus.UNPROCESSABLE_ENTITY,
-                "imagens remotas ainda não são suportadas nesta versão; "
-                "use entradas numéricas ou arrays JSON",
-            )
     return input_specs
 
 
@@ -761,13 +927,18 @@ def receive_pairing(
             HTTPStatus.BAD_REQUEST,
             "'name' e 'code' devem ser strings",
         )
-    pairing = state.security.pair(client_name, pairing_code)
+    pairing = state.security.pair(
+        client_name,
+        pairing_code,
+        peer_id=str(handler.client_address[0]),
+    )
     state.append_event(
         {
             "type": "pairing",
             "status": "success",
             "client_id": pairing["client_id"],
             "client": pairing["name"],
+            "role": pairing["role"],
         }
     )
     return pairing
@@ -783,6 +954,12 @@ def receive_deployment(
         or handler.headers.get("X-Mirai-Model-Name")
     )
     artifact_suffix = Path(artifact_name).suffix.lower()
+    try:
+        provider_profile = normalize_provider_profile(
+            handler.headers.get("X-Mirai-Provider-Profile", "auto")
+        )
+    except MiraiRuntimeError as error:
+        raise AgentRequestError(HTTPStatus.BAD_REQUEST, str(error)) from error
     expected_sha256 = handler.headers.get("X-Mirai-SHA256", "").lower()
     if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
         raise AgentRequestError(
@@ -858,7 +1035,7 @@ def receive_deployment(
 
         validate_model(model_path)
         ort, _ = load_runtime_dependencies()
-        session = create_session(model_path, ort)
+        session = create_session(model_path, ort, provider_profile)
         if contract is not None:
             validate_runtime_contract(
                 manifest,
@@ -900,6 +1077,7 @@ def receive_deployment(
             "model_sha256": model_sha256,
             "model_size_bytes": model_size_bytes,
             "providers": providers,
+            "provider_profile": provider_profile,
         }
         if package_metadata is not None:
             deployment_data["package"] = package_metadata
@@ -988,12 +1166,17 @@ def receive_inference(
             }
     started_at = perf_counter()
     try:
-        result, latency_ms = run_model(
-            model_path,
+        with materialize_remote_inputs(
             input_specs,
-            layout,
-            preprocessing,
-        )
+            payload.get("attachments"),
+        ) as materialized_specs:
+            result, latency_ms = run_model(
+                model_path,
+                materialized_specs,
+                layout,
+                preprocessing,
+                str(deployment.get("provider_profile", "auto")),
+            )
     except MiraiRuntimeError as error:
         state.append_event(
             {
@@ -1028,6 +1211,7 @@ def create_agent_server(
     *,
     secure: bool = False,
     security_clock: Callable[[], datetime] | None = None,
+    pairing_role: str = "admin",
 ) -> MiraiAgentServer:
     """Cria um servidor configurável, inclusive com porta efêmera em testes."""
     return MiraiAgentServer(
@@ -1036,6 +1220,7 @@ def create_agent_server(
             data_dir,
             secure=secure,
             security_clock=security_clock,
+            pairing_role=pairing_role,
         ),
     )
 
@@ -1046,6 +1231,8 @@ def run_agent(
     data_dir: Path,
     *,
     force_secure: bool = False,
+    pairing_role: str = "admin",
+    discoverable: bool = False,
 ) -> None:
     """Executa o Agent até receber interrupção do processo."""
     secure = force_secure or not is_loopback_host(host)
@@ -1054,6 +1241,7 @@ def run_agent(
         port,
         data_dir,
         secure=secure,
+        pairing_role=pairing_role,
     )
     actual_host, actual_port = server.server_address[:2]
     scheme = "https" if secure else "http"
@@ -1074,6 +1262,7 @@ def run_agent(
             "[MiraiOS] Código de pareamento (uso único): "
             f"{security.pairing_code}"
         )
+        print(f"[MiraiOS] Papel concedido neste pareamento: {pairing_role}")
         expires_at = security.pairing_expires_at
         if expires_at is not None:
             print(
@@ -1084,9 +1273,32 @@ def run_agent(
         print(
             "[MiraiOS] Modo local sem autenticação; somente localhost."
         )
+    advertiser: AgentAdvertiser | None = None
+    if discoverable:
+        try:
+            advertised_host = (
+                socket.gethostbyname(socket.gethostname())
+                if host in {"0.0.0.0", "::"}
+                else host
+            )
+            advertiser = AgentAdvertiser(
+                advertised_host,
+                actual_port,
+                agent_id=server.state.security.agent_id,
+                tls=secure,
+                version=__version__,
+            )
+            print("[MiraiOS] Descoberta mDNS ativa (candidatos não confiáveis).")
+        except (OSError, MiraiRuntimeError) as error:
+            server.server_close()
+            raise MiraiRuntimeError(
+                f"não foi possível iniciar descoberta mDNS: {error}"
+            ) from error
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n[MiraiOS] Encerrando Agent.")
     finally:
+        if advertiser is not None:
+            advertiser.close()
         server.server_close()

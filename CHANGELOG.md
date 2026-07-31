@@ -5,6 +5,77 @@ Todas as mudanças relevantes do MiraiOS serão documentadas neste arquivo.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e
 o projeto utiliza [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.11.0] - 2026-07-31
+
+### Adicionado
+
+- assinatura destacada de pacotes `.mirai` e relatórios JSON com Ed25519 e
+  envelopes DSSE tipados;
+- comandos `mirai key generate`, `mirai sign` e `mirai verify`;
+- assinatura automática opcional dos relatórios do Mirai Pilot;
+- histórico consultável com `pilot history`, leitura por `run_id` e retenção
+  segura com `pilot prune`;
+- retenção de deployments inativos com simulação padrão e remoção
+  transacional no Agent;
+- papéis `viewer`, `operator` e `admin`, concessão explícita no pareamento e
+  administração remota de clientes;
+- rotação offline da identidade TLS com invalidação de clientes e trilha de
+  auditoria sem preservar a chave privada antiga;
+- limitação por origem para tentativas repetidas de pareamento;
+- upload remoto de PNG, JPEG, BMP, WebP, JSON e NPY com base64 estrito,
+  tamanho, SHA-256 e validação do conteúdo real;
+- seleção explícita dos perfis `auto`, `cpu`, `cuda` e `directml`, sem fallback
+  silencioso quando uma aceleração solicitada não existe;
+- inventário de perfil de hardware, visão concorrente da frota e descoberta
+  mDNS opcional marcada como não confiável;
+- ponto de extensão experimental `mirai.runtime_backends` para runtimes de
+  terceiros e classificação explícita de RISC-V como experimental;
+- job nativo `ubuntu-24.04-arm` para executar toda a suíte em ARM64;
+- bundle de release do CI com wheel, source archive e `SHA256SUMS`;
+- especificação, limites e modelo de ameaças em `docs/hikari-v0.11.md`.
+- política de divulgação responsável em `SECURITY.md`.
+
+### Segurança
+
+- a assinatura usa o Pre-Authentication Encoding do DSSE para ligar o tipo do
+  payload aos bytes assinados e evitar depender de canonicalização JSON;
+- chaves privadas Ed25519 são gravadas em arquivo local com modo `0600` em
+  sistemas compatíveis;
+- anexos nunca reutilizam nomes enviados pelo cliente, são materializados em
+  diretório temporário e eliminados depois da inferência;
+- imagens são decodificadas e verificadas, JSON recusa números não finitos e
+  NPY usa `allow_pickle=False`;
+- exclusão do deployment ativo é recusada e a remoção dos arquivos usa
+  tombstones com restauração se a atualização do registro falhar;
+- o último administrador não pode ser rebaixado acidentalmente;
+- descoberta mDNS não cadastra, não pareia e não autentica um Agent;
+- a suíte passou de 70 para 180 testes, cobrindo adulteração, autorização,
+  abuso de pareamento, uploads hostis, retenção e seleção de providers.
+
+### Alterado
+
+- a versão do projeto e do protocolo de compatibilidade passou para `0.11.0`;
+- o registro local de dispositivos passou ao formato v3 para persistir o papel
+  concedido, com leitura compatível das versões anteriores;
+- o registro de clientes passou ao formato v2 e migra clientes antigos para
+  `admin`, preservando o comportamento da v0.10;
+- o corpo JSON de inferência passou a aceitar até 14 MB para comportar a
+  codificação base64, mantendo limites menores por arquivo e por requisição;
+- DirectML permanece disponível como provider compatível, mas é documentado
+  como tecnologia em manutenção, sem promessa de ser o caminho mais novo do
+  ecossistema Windows.
+
+### Compatibilidade e limites
+
+- Mirai Package permanece no formato v1 e assinaturas são arquivos
+  destacados, portanto o pacote original continua reproduzível;
+- CPU e ARM64 são exercitados no CI; CUDA e DirectML possuem seleção e testes
+  de configuração, mas exigem validação no hardware e pacote de runtime do
+  usuário;
+- ONNX Runtime continua sendo o único backend interno estável; plugins e
+  RISC-V são superfícies experimentais, não compatibilidade certificada;
+- mDNS exige o extra opcional `miraios[discovery]`.
+
 ## [0.10.0] - 2026-07-31
 
 ### Adicionado
@@ -205,3 +276,4 @@ o projeto utiliza [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 [0.8.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.7.0...v0.8.0
 [0.9.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.8.0...v0.9.0
 [0.10.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.9.0...v0.10.0
+[0.11.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.10.0...v0.11.0

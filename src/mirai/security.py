@@ -20,17 +20,31 @@ from typing import Any
 from .errors import MiraiRuntimeError
 
 
-SECURITY_REGISTRY_VERSION = 1
+SECURITY_REGISTRY_VERSION = 2
 PAIRING_CODE_TTL_SECONDS = 10 * 60
+PAIRING_ATTEMPT_WINDOW_SECONDS = 60
+PAIRING_BLOCK_SECONDS = 5 * 60
+PAIRING_MAX_FAILURES = 5
 PAIRING_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 PAIRING_CODE_LENGTH = 12
 CLIENT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 FINGERPRINT_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,256}$")
+CLIENT_ID_PATTERN = re.compile(r"^[0-9a-f]{16}$")
+ACCESS_ROLES = ("viewer", "operator", "admin")
+ROLE_RANK = {role: index for index, role in enumerate(ACCESS_ROLES)}
 
 
 class PairingDenied(ValueError):
     """Indica que uma tentativa de pareamento não pode prosseguir."""
+
+
+class PairingRateLimited(PairingDenied):
+    """Indica bloqueio temporário após tentativas repetidas."""
+
+    def __init__(self, message: str, retry_after: int) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 class AuthenticationDenied(ValueError):
@@ -45,6 +59,21 @@ def utc_now() -> datetime:
 def utc_iso(moment: datetime | None = None) -> str:
     """Serializa um instante UTC no formato ISO 8601."""
     return (moment or utc_now()).astimezone(timezone.utc).isoformat()
+
+
+def normalize_role(value: str) -> str:
+    """Valida um papel de acesso conhecido."""
+    normalized = value.strip().lower()
+    if normalized not in ROLE_RANK:
+        raise MiraiRuntimeError(
+            f"papel inválido: {value!r}; use {', '.join(ACCESS_ROLES)}"
+        )
+    return normalized
+
+
+def role_allows(actual: str, required: str) -> bool:
+    """Compara os papéis segundo a hierarquia viewer < operator < admin."""
+    return ROLE_RANK.get(actual, -1) >= ROLE_RANK[normalize_role(required)]
 
 
 def normalize_fingerprint(value: str) -> str:
@@ -269,7 +298,7 @@ def load_or_create_identity(data_dir: Path) -> AgentIdentity:
     fingerprint = payload.get("fingerprint")
     created_at = payload.get("created_at")
     if (
-        payload.get("version") != SECURITY_REGISTRY_VERSION
+        payload.get("version") not in {1, SECURITY_REGISTRY_VERSION}
         or not isinstance(agent_id, str)
         or not re.fullmatch(r"[0-9a-f]{32}", agent_id)
         or not isinstance(fingerprint, str)
@@ -299,6 +328,61 @@ def load_or_create_identity(data_dir: Path) -> AgentIdentity:
     )
 
 
+def rotate_agent_identity(data_dir: Path, expected_agent_id: str) -> AgentIdentity:
+    """Troca a identidade TLS e invalida clientes, exigindo confirmação exata."""
+    root = data_dir.expanduser().resolve()
+    current = load_or_create_identity(root)
+    if not secrets.compare_digest(current.agent_id, expected_agent_id):
+        raise MiraiRuntimeError(
+            "confirmação incorreta; informe o Agent ID atual exatamente"
+        )
+    history = root / "identity-history"
+    history.mkdir(parents=True, exist_ok=True)
+    timestamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
+    audit_path = history / f"{timestamp}-{current.agent_id}.json"
+    _save_private_json(
+        audit_path,
+        {
+            "version": 1,
+            "agent_id": current.agent_id,
+            "fingerprint": current.fingerprint,
+            "created_at": current.created_at,
+            "rotated_at": utc_iso(),
+        },
+    )
+    paths = (
+        root / "identity.json",
+        root / "agent-cert.pem",
+        root / "agent-key.pem",
+        root / "clients.json",
+    )
+    moved: list[tuple[Path, Path]] = []
+    transaction_id = uuid.uuid4().hex
+    try:
+        for path in paths:
+            if not path.exists():
+                continue
+            tombstone = root / f".{path.name}.rotate-{transaction_id}"
+            os.replace(path, tombstone)
+            moved.append((path, tombstone))
+        rotated = _generate_identity(root)
+    except BaseException:
+        for generated in paths[:3]:
+            generated.unlink(missing_ok=True)
+        for original, tombstone in reversed(moved):
+            if tombstone.exists():
+                os.replace(tombstone, original)
+        raise
+    for _, tombstone in moved:
+        try:
+            tombstone.unlink(missing_ok=True)
+        except OSError as error:
+            raise MiraiRuntimeError(
+                f"não foi possível remover material da identidade antiga: {error}"
+            ) from error
+    return rotated
+
+
 class AgentSecurity:
     """Gerencia o canal seguro e os clientes pareados de um Agent."""
 
@@ -308,15 +392,19 @@ class AgentSecurity:
         *,
         secure: bool,
         clock: Callable[[], datetime] = utc_now,
+        pairing_role: str = "admin",
     ) -> None:
         self.secure = secure
         self.clients_path = data_dir / "clients.json"
         self._clock = clock
+        self.pairing_role = normalize_role(pairing_role)
         self._lock = threading.Lock()
         self.identity = load_or_create_identity(data_dir) if secure else None
         self._pairing_code: str | None = None
         self._pairing_code_hash: str | None = None
         self._pairing_expires_at: datetime | None = None
+        self._pairing_failures: dict[str, list[datetime]] = {}
+        self._pairing_blocked_until: dict[str, datetime] = {}
         if secure:
             self.rotate_pairing_code()
 
@@ -377,7 +465,7 @@ class AgentSecurity:
         payload = _load_json(self.clients_path, "os clientes pareados")
         clients = payload.get("clients")
         if (
-            payload.get("version") != SECURITY_REGISTRY_VERSION
+            payload.get("version") not in {1, SECURITY_REGISTRY_VERSION}
             or not isinstance(clients, list)
         ):
             raise MiraiRuntimeError(
@@ -393,6 +481,13 @@ class AgentSecurity:
                 raise MiraiRuntimeError(
                     "registro de clientes pareados está corrompido"
                 )
+            role = client.get("role", "admin")
+            if role not in ROLE_RANK:
+                raise MiraiRuntimeError(
+                    "registro de clientes pareados possui papel inválido"
+                )
+            client["role"] = role
+        payload["version"] = SECURITY_REGISTRY_VERSION
         return payload
 
     def _save_clients_unlocked(self, payload: dict[str, Any]) -> None:
@@ -406,23 +501,62 @@ class AgentSecurity:
             if key != "token_sha256"
         }
 
-    def pair(self, name: str, code: str) -> dict[str, Any]:
+    def _check_pairing_limit_unlocked(self, peer_id: str) -> None:
+        now = self._clock()
+        blocked_until = self._pairing_blocked_until.get(peer_id)
+        if blocked_until is not None and now < blocked_until:
+            retry_after = max(1, int((blocked_until - now).total_seconds()))
+            raise PairingRateLimited(
+                "muitas tentativas de pareamento; aguarde antes de tentar novamente",
+                retry_after,
+            )
+        if blocked_until is not None:
+            self._pairing_blocked_until.pop(peer_id, None)
+        cutoff = now - timedelta(seconds=PAIRING_ATTEMPT_WINDOW_SECONDS)
+        self._pairing_failures[peer_id] = [
+            moment
+            for moment in self._pairing_failures.get(peer_id, [])
+            if moment > cutoff
+        ]
+
+    def _record_pairing_failure_unlocked(self, peer_id: str) -> None:
+        failures = self._pairing_failures.setdefault(peer_id, [])
+        failures.append(self._clock())
+        if len(failures) >= PAIRING_MAX_FAILURES:
+            self._pairing_blocked_until[peer_id] = self._clock() + timedelta(
+                seconds=PAIRING_BLOCK_SECONDS
+            )
+
+    def pair(
+        self,
+        name: str,
+        code: str,
+        *,
+        peer_id: str = "unknown",
+    ) -> dict[str, Any]:
         """Consome o código efêmero e devolve o token apenas uma vez."""
         if not self.secure or self.identity is None:
             raise PairingDenied("pareamento exige um Agent com HTTPS")
-        if not CLIENT_NAME_PATTERN.fullmatch(name):
-            raise PairingDenied(
-                "nome do cliente inválido; use letras, números, ponto, "
-                "hífen ou sublinhado"
-            )
-        normalized_code = normalize_pairing_code(code)
-
         with self._lock:
+            normalized_peer = peer_id[:128] or "unknown"
+            self._check_pairing_limit_unlocked(normalized_peer)
+            if not CLIENT_NAME_PATTERN.fullmatch(name):
+                self._record_pairing_failure_unlocked(normalized_peer)
+                raise PairingDenied(
+                    "nome do cliente inválido; use letras, números, ponto, "
+                    "hífen ou sublinhado"
+                )
+            try:
+                normalized_code = normalize_pairing_code(code)
+            except PairingDenied:
+                self._record_pairing_failure_unlocked(normalized_peer)
+                raise
             if (
                 not self._pairing_code_hash
                 or not self._pairing_expires_at
                 or self._clock() >= self._pairing_expires_at
             ):
+                self._record_pairing_failure_unlocked(normalized_peer)
                 raise PairingDenied(
                     "código de pareamento expirado ou já utilizado"
                 )
@@ -433,6 +567,7 @@ class AgentSecurity:
                 submitted_hash,
                 self._pairing_code_hash,
             ):
+                self._record_pairing_failure_unlocked(normalized_peer)
                 raise PairingDenied("código de pareamento inválido")
 
             token = secrets.token_urlsafe(32)
@@ -445,6 +580,7 @@ class AgentSecurity:
                 ).hexdigest(),
                 "created_at": now,
                 "last_seen_at": now,
+                "role": self.pairing_role,
             }
             payload = self._load_clients_unlocked()
             payload["clients"].append(client)
@@ -452,6 +588,8 @@ class AgentSecurity:
             self._pairing_code = None
             self._pairing_code_hash = None
             self._pairing_expires_at = None
+            self._pairing_failures.pop(normalized_peer, None)
+            self._pairing_blocked_until.pop(normalized_peer, None)
 
         return {
             **self._public_client(client),
@@ -468,6 +606,7 @@ class AgentSecurity:
                 "name": "local",
                 "created_at": None,
                 "last_seen_at": utc_iso(self._clock()),
+                "role": "admin",
             }
         if not token or not TOKEN_PATTERN.fullmatch(token):
             raise AuthenticationDenied("token de acesso ausente ou inválido")
@@ -519,6 +658,39 @@ class AgentSecurity:
                 self._public_client(client)
                 for client in payload["clients"]
             ]
+
+    def set_client_role(self, client_id: str, role: str) -> dict[str, Any]:
+        """Altera um papel sem permitir que o último admin seja removido."""
+        if not CLIENT_ID_PATTERN.fullmatch(client_id):
+            raise MiraiRuntimeError("identificador de cliente inválido")
+        normalized_role = normalize_role(role)
+        with self._lock:
+            payload = self._load_clients_unlocked()
+            client = next(
+                (
+                    item
+                    for item in payload["clients"]
+                    if item.get("client_id") == client_id
+                ),
+                None,
+            )
+            if client is None:
+                raise MiraiRuntimeError(f"cliente '{client_id}' não encontrado")
+            admin_count = sum(
+                item.get("role") == "admin" for item in payload["clients"]
+            )
+            if (
+                client.get("role") == "admin"
+                and normalized_role != "admin"
+                and admin_count <= 1
+            ):
+                raise MiraiRuntimeError(
+                    "o último administrador não pode ser rebaixado"
+                )
+            client["role"] = normalized_role
+            client["updated_at"] = utc_iso(self._clock())
+            self._save_clients_unlocked(payload)
+            return self._public_client(client)
 
     def create_server_context(self) -> ssl.SSLContext:
         """Cria um contexto TLS de servidor com identidade persistente."""

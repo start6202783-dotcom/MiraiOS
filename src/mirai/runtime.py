@@ -14,6 +14,7 @@ from .package import (
     preprocessing_from_manifest,
     validate_runtime_contract,
 )
+from .providers import resolve_provider_profile
 
 
 def load_runtime_dependencies() -> tuple[Any, Any]:
@@ -33,13 +34,28 @@ def load_runtime_dependencies() -> tuple[Any, Any]:
     return ort, np
 
 
-def create_session(model_path: Path, ort: Any) -> Any:
-    """Cria uma sessão de inferência usando o provider de CPU."""
+def create_session(
+    model_path: Path,
+    ort: Any,
+    provider_profile: str = "auto",
+) -> Any:
+    """Cria uma sessão com seleção explícita e fallback declarado."""
     ensure_model_path(model_path)
+    providers = resolve_provider_profile(
+        provider_profile,
+        ort.get_available_providers(),
+    )
+    options: dict[str, Any] = {"providers": providers}
+    if "DmlExecutionProvider" in providers and hasattr(ort, "SessionOptions"):
+        session_options = ort.SessionOptions()
+        session_options.enable_mem_pattern = False
+        if hasattr(ort, "ExecutionMode"):
+            session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        options["sess_options"] = session_options
     try:
         return ort.InferenceSession(
             str(model_path),
-            providers=["CPUExecutionProvider"],
+            **options,
         )
     except Exception as error:
         raise MiraiRuntimeError(
@@ -52,6 +68,7 @@ def prepare_inference(
     input_specs: list[str] | None = None,
     layout: str = "auto",
     preprocessing: dict[str, dict[str, Any]] | None = None,
+    provider_profile: str = "auto",
 ) -> tuple[Any, dict[str, Any]]:
     """Cria a sessão e prepara todas as entradas do modelo."""
     ort, np = load_runtime_dependencies()
@@ -59,7 +76,7 @@ def prepare_inference(
         resolved_model_path,
         manifest,
     ):
-        session = create_session(resolved_model_path, ort)
+        session = create_session(resolved_model_path, ort, provider_profile)
         if manifest is not None:
             validate_runtime_contract(
                 manifest,
@@ -123,6 +140,7 @@ def run_model(
     input_specs: list[str] | None = None,
     layout: str = "auto",
     preprocessing: dict[str, dict[str, Any]] | None = None,
+    provider_profile: str = "auto",
 ) -> tuple[object, float]:
     """Prepara e executa uma inferência local."""
     session, input_feed = prepare_inference(
@@ -130,6 +148,7 @@ def run_model(
         input_specs,
         layout,
         preprocessing,
+        provider_profile,
     )
     outputs, elapsed_ms = execute_inference(session, input_feed)
     return normalize_inference_result(outputs), elapsed_ms

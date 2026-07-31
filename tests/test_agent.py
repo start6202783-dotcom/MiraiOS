@@ -398,14 +398,14 @@ def test_agent_requires_active_deployment(
         run_remote_model(agent_device, ["5.0"], "auto")
 
 
-def test_agent_rejects_remote_image_paths(
+def test_agent_rejects_missing_remote_image_paths(
     agent_device: Device,
     dummy_model: Path,
 ) -> None:
     deployment = deploy_model(agent_device, dummy_model)
     activate_deployment(agent_device, deployment["deployment_id"])
 
-    with pytest.raises(MiraiRuntimeError, match="imagens remotas"):
+    with pytest.raises(MiraiRuntimeError, match="arquivo de entrada não encontrado"):
         run_remote_model(agent_device, ["foto.jpg"], "auto")
 
 
