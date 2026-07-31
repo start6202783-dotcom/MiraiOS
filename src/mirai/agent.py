@@ -1114,6 +1114,10 @@ def _install_verified_file(
         source.unlink(missing_ok=True)
         return False
     try:
+        os.chmod(source, 0o444)
+    except OSError:
+        pass
+    try:
         os.link(source, target, follow_symlinks=False)
     except FileExistsError:
         verify_file(
@@ -1129,10 +1133,6 @@ def _install_verified_file(
             f"não foi possível instalar '{target.name}' sem sobrescrita: {error}"
         ) from error
     source.unlink(missing_ok=True)
-    try:
-        os.chmod(target, 0o444)
-    except OSError:
-        pass
     try:
         verify_file(
             target,

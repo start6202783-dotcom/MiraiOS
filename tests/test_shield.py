@@ -323,6 +323,7 @@ def test_agent_rejects_model_tampering_before_activation(
     try:
         deployment = deploy_model(device, dummy_model)
         stored = next(server.state.models_dir.iterdir())
+        stored.chmod(0o600)
         stored.write_bytes(b"tampered")
         with pytest.raises(MiraiRuntimeError, match="alterado"):
             activate_deployment(device, deployment["deployment_id"])
@@ -346,6 +347,7 @@ def test_agent_rechecks_integrity_after_activation(
         activate_deployment(device, deployment["deployment_id"])
         assert run_remote_model(device, ["1"], "auto")["result"] == 2.0
         stored = next(server.state.models_dir.iterdir())
+        stored.chmod(0o600)
         stored.write_bytes(b"tampered")
         with pytest.raises(MiraiRuntimeError, match="alterado"):
             run_remote_model(device, ["1"], "auto")
