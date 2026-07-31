@@ -14,8 +14,9 @@
 em dispositivos Edge.**
 
 [Começar](#comece-em-3-minutos) ·
+[Mirai Pilot](#mirai-pilot) ·
 [Parear](#conecte-um-dispositivo-na-rede) ·
-[Demonstração](#o-fluxo-da-v09) ·
+[Demonstração](#o-marco-da-v010) ·
 [Arquitetura](#arquitetura) ·
 [CLI](#comandos) ·
 [Roadmap](#roadmap)
@@ -29,7 +30,7 @@ modelo ONNX em um artefato distribuível e um serviço de inferência operável
 em Linux:
 
 ```text
-pack → verificação → pareamento → deploy → ativação → inferência → métricas
+pack → verificação → deploy → health check → benchmark → aceite → evidência
 ```
 
 A CLI permanece no computador do desenvolvedor. O **Mirai Agent** roda no
@@ -38,26 +39,30 @@ inferência. O primeiro destino pode ser o próprio computador ou um container;
 o protocolo é independente de fabricante e não exige uma Raspberry Pi para
 começar.
 
-> **Do modelo ao dispositivo físico em um único fluxo verificável.**
+> **Do modelo ao dispositivo físico em um único fluxo verificável, com
+> critérios e rollback.**
 
-## O fluxo da v0.9
+## O marco da v0.10
 
 ![Demonstração do Mirai Package no MiraiOS](https://raw.githubusercontent.com/start6202783-dotcom/MiraiOS/main/docs/assets/miraios-demo.gif)
 
-A v0.9 adiciona o **Mirai Package**, um artefato `.mirai` reproduzível que
-mantém modelo, identidade, contrato e pré-processamento juntos:
+A v0.10 adiciona o **Mirai Pilot**, uma camada transacional sobre o Mirai
+Package. Em vez de apenas enviar um arquivo, ela executa e documenta um teste
+de aceitação completo no dispositivo:
 
 | Etapa | O que acontece |
 | --- | --- |
-| **Pack** | `mirai pack` valida o ONNX e captura seu contrato real. |
-| **Bind** | Nome, SemVer e pré-processamento passam a viajar com o modelo. |
-| **Verify** | Estrutura, schema, SHA-256 e contrato são conferidos antes do uso. |
-| **Operate** | O mesmo pacote pode ser inspecionado, executado e enviado ao Agent. |
-| **Preserve** | O Agent guarda o `.mirai` original e o ONNX pronto para execução. |
-| **Trust** | O Hikari Link da v0.8 mantém TLS, pinning, autenticação e revogação. |
+| **Declare** | Um JSON versionado define artefato, destino, entrada e metas. |
+| **Verify** | Artefato, conexão, identidade, versões e runtime são conferidos. |
+| **Launch** | Deploy, ativação e inferência de saúde acontecem em um fluxo. |
+| **Measure** | O Agent mede warm-up, latência, P95 e IPS no hardware real. |
+| **Accept** | Resultado e desempenho são comparados aos critérios declarados. |
+| **Prove** | JSON e Markdown registram as evidências de cada execução. |
+| **Recover** | Uma falha restaura o deployment anterior automaticamente. |
 
-O fluxo direto com `.onnx` permanece compatível. O formato v1 e seus limites
-estão documentados em [Projeto Hikari v0.9](docs/hikari-v0.9.md).
+Para o caminho rápido, `mirai launch` leva um modelo validado até a primeira
+inferência em um comando. O desenho, schema e limites estão documentados em
+[Projeto Hikari v0.10](docs/hikari-v0.10.md).
 
 ## Por que este projeto existe
 
@@ -70,13 +75,19 @@ estão documentados em [Projeto Hikari v0.9](docs/hikari-v0.9.md).
   identidade única verificável por SHA-256.
 - **Lifecycle explícito:** receber um arquivo não significa ativá-lo; cada
   transição é intencional e observável.
+- **Aceite reproduzível:** resultado, P95 e vazão podem virar critérios
+  executáveis, não apenas promessas.
+- **Falha recuperável:** um piloto reprovado não substitui silenciosamente o
+  deployment que já funcionava.
+- **Evidência portátil:** relatórios JSON e Markdown podem acompanhar a entrega
+  técnica de um piloto.
 - **Formato aberto:** ONNX reduz o acoplamento a um framework de treinamento.
 - **Base pequena e auditável:** CLI, cliente, Agent, segurança e runtime são
   módulos Python independentes, sem framework web obrigatório.
 
 ## Status atual
 
-| Capacidade | v0.9 |
+| Capacidade | v0.10 |
 | --- | --- |
 | Validação estrutural com `onnx.checker` | Pronto |
 | Pacote `.mirai` determinístico com manifesto estrito | Pronto |
@@ -89,10 +100,14 @@ estão documentados em [Projeto Hikari v0.9](docs/hikari-v0.9.md).
 | Identidade TLS persistente e fingerprint SHA-256 | Pronto |
 | Pareamento de uso único e autenticação por cliente | Pronto |
 | Diagnóstico e revogação pela CLI | Pronto |
+| Launch completo em um comando | Pronto |
+| Piloto declarativo com critérios de aceite | Pronto |
+| Benchmark remoto e relatórios JSON/Markdown | Pronto |
+| Rollback automático após reprovação | Pronto |
 | Imagens em inferência remota | Ainda não |
 | Provider validado no CI | ONNX Runtime CPU |
 
-O projeto está em estágio **alpha**. A v0.9 foi desenhada para laboratório,
+O projeto está em estágio **alpha**. A v0.10 foi desenhada para laboratório,
 localhost e redes privadas controladas; ela ainda não é um gateway para
 exposição direta à internet.
 
@@ -101,22 +116,26 @@ exposição direta à internet.
 ```mermaid
 flowchart TD
     CLI["Mirai CLI"]
+    PILOT["Mirai Pilot<br/>critérios + pipeline"]
     REG["Registro local protegido"]
     LINK["Hikari Link<br/>TLS + pinning + token"]
     API["Mirai Agent API v1"]
     PKG["Mirai Package<br/>manifesto + ONNX + SHA-256"]
     LIFE["Lifecycle persistente"]
     ORT["ONNX Runtime"]
+    REPORT["Evidências<br/>JSON + Markdown"]
     EDGE["Linux · Docker · futuro ARM64"]
 
-    CLI --> REG
+    CLI --> PILOT
+    PILOT --> REG
     CLI --> PKG
     PKG --> LINK
-    CLI --> LINK
+    PILOT --> LINK
     LINK --> API
     API --> LIFE
     LIFE --> ORT
     ORT --> EDGE
+    PILOT --> REPORT
 ```
 
 O Agent usa armazenamento simples e inspecionável:
@@ -130,7 +149,8 @@ O Agent usa armazenamento simples e inspecionável:
 | `deployments.json` | Deployments, estados e seleção ativa. |
 | `events.jsonl` | Histórico de pareamentos, deploys, ativações e inferências. |
 
-O formato está especificado em [Projeto Hikari v0.9](docs/hikari-v0.9.md) e o
+O piloto está especificado em [Projeto Hikari v0.10](docs/hikari-v0.10.md), o
+formato em [Projeto Hikari v0.9](docs/hikari-v0.9.md) e o
 modelo de confiança da rede em [Projeto Hikari v0.8](docs/hikari-v0.8.md).
 
 ## Comece em 3 minutos
@@ -176,7 +196,7 @@ mirai agent start
 O endereço padrão é `http://127.0.0.1:8080`. Esse modo deliberadamente
 dispensa pareamento porque só aceita conexões da própria máquina.
 
-### 3. Empacote, faça deploy, ative e execute
+### 3. Empacote e faça o primeiro launch
 
 No segundo terminal:
 
@@ -186,17 +206,41 @@ mirai pack examples/dummy_model.onnx \
   --name dummy \
   --package-version 1.0.0
 mirai device add local --url http://127.0.0.1:8080
-mirai doctor --device local
-mirai validate dummy-1.0.0.mirai
-mirai deploy dummy-1.0.0.mirai --device local
-mirai status --device local
-mirai activate ID-EXIBIDO-NO-DEPLOY --device local
-mirai run --device local --input 5.0
-mirai logs --device local
+mirai launch dummy-1.0.0.mirai --device local --input 5.0
 ```
 
 O modelo de exemplo soma `1` à entrada, portanto o resultado esperado é
-`6.0`. Substitua `ID-EXIBIDO-NO-DEPLOY` pelo identificador retornado.
+`6.0`. O `launch` valida o pacote e o dispositivo, faz deploy, ativa e testa o
+modelo. Se o teste final falhar, ele restaura a ativação anterior.
+
+## Mirai Pilot
+
+Quando você precisa provar que uma entrega funciona e atende a uma meta, crie
+um projeto de piloto:
+
+```bash
+mirai pilot init
+```
+
+O arquivo `mirai-pilot.json` já nasce com o exemplo local. Depois de revisar os
+valores, execute:
+
+```bash
+mirai pilot run
+```
+
+O Pilot executa validação, diagnóstico, deploy, ativação, health check,
+benchmark remoto e critérios de aceite. No fim, ele grava:
+
+```text
+.mirai/reports/
+├── dummy-local-DATA-ID.json  # evidência estruturada para automação
+└── dummy-local-DATA-ID.md    # relatório legível para a entrega
+```
+
+Se qualquer etapa ou critério falhar, o relatório registra o motivo e o
+deployment anterior é restaurado. Veja todos os campos, limites e garantias em
+[Projeto Hikari v0.10](docs/hikari-v0.10.md).
 
 ## Conecte um dispositivo na rede
 
@@ -240,6 +284,9 @@ mirai device revoke edge
 | `mirai info ARQUIVO` | Exibe contrato, hashes, tipos, shapes e nós. |
 | `mirai run ARQUIVO --input 5` | Executa inferência local. |
 | `mirai benchmark ARQUIVO` | Mede latência, P95 e vazão local. |
+| `mirai launch ARQUIVO --device edge --input 5` | Faz o fluxo rápido até a inferência. |
+| `mirai pilot init` | Cria um projeto declarativo de piloto. |
+| `mirai pilot run [ARQUIVO]` | Executa critérios, relatório e rollback. |
 | `mirai agent start` | Inicia o Agent local. |
 | `mirai agent start --host 0.0.0.0` | Inicia um Agent HTTPS pareável. |
 | `mirai device add/list/info/remove` | Gerencia destinos locais. |
@@ -320,6 +367,9 @@ mirai benchmark modelo-1.0.0.mirai --runs 100 --warmup 5
 O carregamento do modelo não entra na medição. O relatório inclui tempo total,
 latência média, mediana, percentil 95 e inferências por segundo.
 
+No Mirai Pilot, as medições acontecem no Agent e podem ser comparadas a
+`max_p95_ms` e `min_ips`. O tempo de rede não entra na latência do modelo.
+
 ## Docker: dispositivo sem placa física
 
 O repositório inclui um Agent HTTPS isolado em container:
@@ -361,10 +411,14 @@ acesso pela rede:
 - o Agent persiste somente o SHA-256 do token; o registro da CLI usa permissão
   `0600` em sistemas compatíveis;
 - somente `/v1/health` e `/v1/pair` são públicos no modo seguro;
-- respostas da API usam `Cache-Control: no-store`.
+- respostas da API usam `Cache-Control: no-store`;
 - pacotes recusam arquivos extras, duplicados, links, compressão e manifesto
   fora do schema;
-- o hash interno protege o ONNX e o contrato declarado é comparado ao runtime.
+- o hash interno protege o ONNX e o contrato declarado é comparado ao runtime;
+- um Pilot reprovado restaura a ativação anterior ou desativa o primeiro
+  candidato;
+- relatórios não recebem token, código de pareamento ou chave privada e, por
+  padrão, ocultam as entradas de inferência.
 
 Ainda não há papéis de autorização, rotação automática de certificados,
 limitação de tentativas, assinatura digital de pacotes ou integração com uma
@@ -386,13 +440,15 @@ internet.
   diagnóstico e revogação.
 - [x] **v0.9 — Distribuição:** pacote `.mirai` reproduzível, manifesto estrito,
   contrato verificável, pré-processamento e deploy compatível.
+- [x] **v0.10 — Aceite:** launch unificado, projeto declarativo, health check,
+  benchmark remoto, critérios, evidências e rollback automático.
 
 ### Próximo
 
-- [ ] Health check por modelo, rollback e histórico de ativações.
-- [ ] Saída JSON para automação e relatórios de benchmark.
+- [ ] Assinatura digital dos relatórios e pacotes `.mirai`.
+- [ ] Histórico consultável de pilotos e política de retenção de deployments.
 - [ ] Rotação de identidade, limitação de pareamento e papéis de acesso.
-- [ ] Assinatura e política de confiança para pacotes `.mirai`.
+- [ ] Upload seguro de imagens e outros arquivos de entrada.
 
 ### Depois
 
@@ -436,6 +492,7 @@ Documentação dos marcos:
 - [v0.7 — lifecycle e inferência remota](docs/hikari-v0.7.md)
 - [v0.8 — Hikari Link](docs/hikari-v0.8.md)
 - [v0.9 — Mirai Package](docs/hikari-v0.9.md)
+- [v0.10 — Mirai Pilot](docs/hikari-v0.10.md)
 - [Changelog completo](CHANGELOG.md)
 
 ## Licença

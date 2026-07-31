@@ -292,6 +292,15 @@ def activate_deployment(
     )
 
 
+def deactivate_deployment(device: Device) -> dict[str, Any]:
+    """Remove o deployment ativo durante um rollback transacional."""
+    return request_json(
+        device,
+        "/v1/deployments/deactivate",
+        method="POST",
+    )
+
+
 def run_remote_model(
     device: Device,
     input_specs: list[str] | None,

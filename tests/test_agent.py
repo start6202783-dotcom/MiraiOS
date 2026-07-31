@@ -14,6 +14,7 @@ import pytest
 from mirai.agent import create_agent_server
 from mirai.agent_client import (
     activate_deployment,
+    deactivate_deployment,
     deploy_model,
     doctor_device,
     get_agent_info,
@@ -318,6 +319,23 @@ def test_agent_activates_and_runs_deployment(
     assert inference["latency_ms"] >= 0
     assert inference["total_ms"] >= inference["latency_ms"]
     assert events[0]["type"] == "inference"
+
+
+def test_agent_deactivates_current_deployment(
+    agent_device: Device,
+    dummy_model: Path,
+) -> None:
+    deployment = deploy_model(agent_device, dummy_model)
+    activate_deployment(agent_device, deployment["deployment_id"])
+
+    result = deactivate_deployment(agent_device)
+    status = get_deployment_status(agent_device)
+    events = get_agent_logs(agent_device)
+
+    assert result["previous_deployment_id"] == deployment["deployment_id"]
+    assert status["active_deployment_id"] is None
+    assert status["deployments"][0]["status"] == "ready"
+    assert events[0]["type"] == "deactivation"
 
 
 def test_agent_preserves_active_deployment_after_restart(

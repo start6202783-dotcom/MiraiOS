@@ -5,6 +5,47 @@ Todas as mudanças relevantes do MiraiOS serão documentadas neste arquivo.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e
 o projeto utiliza [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.10.0] - 2026-07-31
+
+### Adicionado
+
+- `mirai launch` para validar, diagnosticar, implantar, ativar e testar um
+  modelo em um único comando;
+- `mirai pilot init` para criar um projeto declarativo com schema versionado;
+- `mirai pilot run` com inferência de saúde e benchmark executados no Agent;
+- critérios objetivos de resultado, tolerância numérica, P95 máximo e IPS
+  mínimo;
+- relatórios identificados por execução em JSON e Markdown com artefato,
+  métricas, critérios e conclusão;
+- rollback automático para o deployment anterior quando um piloto falha;
+- desativação segura quando o primeiro candidato do dispositivo é reprovado;
+- exemplo executável e especificação em `docs/hikari-v0.10.md`.
+
+### Segurança
+
+- o projeto de piloto usa schema estrito, tamanho e quantidades limitados;
+- configurações com campos desconhecidos ou números não finitos são recusadas;
+- os relatórios registram somente evidências não secretas do dispositivo;
+- escrita de configuração e relatórios usa arquivo temporário e troca atômica;
+- uma reprovação após a ativação não deixa o candidato atendendo inferências;
+- o novo endpoint de desativação exige a mesma autenticação das operações de
+  deployment existentes.
+
+### Alterado
+
+- a versão do projeto passou para `0.10.0`;
+- estatísticas de latências locais e remotas compartilham o mesmo cálculo;
+- o roadmap passa a tratar piloto reproduzível e evidências como capacidades
+  entregues, mantendo gestão de frota e assinatura digital como próximos
+  marcos.
+
+### Compatibilidade
+
+- todos os comandos e projetos da v0.9 continuam funcionando;
+- o Mirai Package permanece no formato v1;
+- Agents e CLIs precisam manter versões minor compatíveis, como já verificado
+  por `mirai doctor`.
+
 ## [0.9.0] - 2026-07-29
 
 ### Adicionado
@@ -163,3 +204,4 @@ o projeto utiliza [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 [0.7.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.6.0...v0.7.0
 [0.8.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.7.0...v0.8.0
 [0.9.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.8.0...v0.9.0
+[0.10.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.9.0...v0.10.0

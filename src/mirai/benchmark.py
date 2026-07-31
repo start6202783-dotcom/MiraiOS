@@ -37,6 +37,36 @@ def _percentile(values: list[float], percentile: float) -> float:
     return ordered[index]
 
 
+def summarize_latencies(
+    latencies_ms: list[float],
+    *,
+    warmup_runs: int = 0,
+) -> BenchmarkStats:
+    """Transforma latências já coletadas em métricas reproduzíveis."""
+    if not latencies_ms:
+        raise MiraiRuntimeError(
+            "o benchmark precisa de pelo menos uma latência medida"
+        )
+    if any(value < 0 for value in latencies_ms):
+        raise MiraiRuntimeError("latências do benchmark não podem ser negativas")
+
+    total_ms = sum(latencies_ms)
+    runs = len(latencies_ms)
+    return BenchmarkStats(
+        runs=runs,
+        warmup_runs=warmup_runs,
+        total_ms=total_ms,
+        average_ms=mean(latencies_ms),
+        median_ms=median(latencies_ms),
+        p95_ms=_percentile(latencies_ms, 0.95),
+        min_ms=min(latencies_ms),
+        max_ms=max(latencies_ms),
+        inferences_per_second=(
+            runs * 1000 / total_ms if total_ms > 0 else float("inf")
+        ),
+    )
+
+
 def benchmark_session(
     session: Any,
     input_feed: dict[str, Any],
@@ -56,20 +86,7 @@ def benchmark_session(
     except Exception as error:
         raise MiraiRuntimeError(f"falha durante o benchmark: {error}") from error
 
-    total_ms = sum(latencies_ms)
-    return BenchmarkStats(
-        runs=runs,
-        warmup_runs=warmup_runs,
-        total_ms=total_ms,
-        average_ms=mean(latencies_ms),
-        median_ms=median(latencies_ms),
-        p95_ms=_percentile(latencies_ms, 0.95),
-        min_ms=min(latencies_ms),
-        max_ms=max(latencies_ms),
-        inferences_per_second=(
-            runs * 1000 / total_ms if total_ms > 0 else float("inf")
-        ),
-    )
+    return summarize_latencies(latencies_ms, warmup_runs=warmup_runs)
 
 
 def benchmark_model(
