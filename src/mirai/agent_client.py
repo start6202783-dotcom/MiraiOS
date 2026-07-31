@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import http.client
-import json
 import secrets
 import ssl
 from pathlib import Path
@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlencode, urlsplit
 
 from . import __version__
+from .admission import MAX_SIGNATURE_HEADER_CHARS
 from .attachments import encode_remote_inputs
 from .devices import (
     Device,
@@ -23,16 +24,20 @@ from .devices import (
 )
 from .errors import MiraiRuntimeError
 from .inspect import validate_artifact
+from .json_codec import strict_json_dumps, strict_json_loads
 from .package import MIRAI_EXTENSION, MIRAI_MEDIA_TYPE, calculate_sha256
 from .providers import normalize_provider_profile
 from .security import normalize_fingerprint
-
 
 DEFAULT_AGENT_TIMEOUT = 15.0
 
 
 def _connection(device: Device) -> tuple[http.client.HTTPConnection, str]:
     parsed = urlsplit(device.url)
+    hostname = parsed.hostname
+    if hostname is None:
+        raise MiraiRuntimeError(f"URL do dispositivo '{device.name}' não possui host")
+    connection: http.client.HTTPConnection
     if parsed.scheme == "https":
         if not device.tls_fingerprint:
             raise MiraiRuntimeError(
@@ -43,7 +48,7 @@ def _connection(device: Device) -> tuple[http.client.HTTPConnection, str]:
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
         connection = http.client.HTTPSConnection(
-            parsed.hostname,
+            hostname,
             parsed.port,
             timeout=DEFAULT_AGENT_TIMEOUT,
             context=context,
@@ -55,6 +60,10 @@ def _connection(device: Device) -> tuple[http.client.HTTPConnection, str]:
                     f"Agent '{device.name}' não abriu um canal TLS"
                 )
             certificate = connection.sock.getpeercert(binary_form=True)
+            if certificate is None:
+                raise MiraiRuntimeError(
+                    f"Agent '{device.name}' não apresentou certificado TLS"
+                )
         except (OSError, ssl.SSLError, http.client.HTTPException) as error:
             connection.close()
             raise MiraiRuntimeError(
@@ -79,7 +88,7 @@ def _connection(device: Device) -> tuple[http.client.HTTPConnection, str]:
                 "use HTTPS com pareamento"
             )
         connection = http.client.HTTPConnection(
-            parsed.hostname,
+            hostname,
             parsed.port,
             timeout=DEFAULT_AGENT_TIMEOUT,
         )
@@ -92,8 +101,12 @@ def _decode_response(
 ) -> dict[str, Any]:
     raw_body = response.read()
     try:
-        payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        payload = (
+            strict_json_loads(raw_body, label="resposta do Agent")
+            if raw_body
+            else {}
+        )
+    except MiraiRuntimeError as error:
         raise MiraiRuntimeError(
             f"Agent '{device.name}' retornou uma resposta inválida"
         ) from error
@@ -121,7 +134,7 @@ def request_json(
     body = None
     headers = {"Accept": "application/json"}
     if payload is not None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        body = strict_json_dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json; charset=utf-8"
         headers["Content-Length"] = str(len(body))
     if authenticate and device.token:
@@ -239,6 +252,7 @@ def doctor_device(device: Device) -> dict[str, Any]:
     health = get_agent_health(device)
     info = get_agent_info(device)
     deployments = get_deployment_status(device)
+    audit = get_agent_audit(device)
     agent_version = str(health.get("agent_version", ""))
     client_series = ".".join(__version__.split(".")[:2])
     agent_series = ".".join(agent_version.split(".")[:2])
@@ -246,6 +260,7 @@ def doctor_device(device: Device) -> dict[str, Any]:
         "health": health,
         "info": info,
         "deployments": deployments,
+        "audit": audit,
         "tls": urlsplit(device.url).scheme == "https",
         "authenticated": device.paired,
         "compatible": bool(
@@ -271,6 +286,16 @@ def get_agent_logs(device: Device, limit: int = 20) -> list[dict[str, Any]]:
             f"Agent '{device.name}' retornou logs em formato inválido"
         )
     return events
+
+
+def get_agent_audit(device: Device) -> dict[str, Any]:
+    """Verifica a cadeia local e devolve o head para ancoragem externa."""
+    payload = request_json(device, "/v1/audit")
+    if payload.get("valid") is not True or not isinstance(payload.get("head"), str):
+        raise MiraiRuntimeError(
+            f"Agent '{device.name}' retornou auditoria inválida"
+        )
+    return payload
 
 
 def get_deployment_status(device: Device) -> dict[str, Any]:
@@ -358,6 +383,7 @@ def deploy_model(
     device: Device,
     artifact_path: Path,
     provider_profile: str = "auto",
+    signature_path: Path | None = None,
 ) -> dict[str, Any]:
     """Valida e envia um ONNX ou pacote .mirai usando um corpo binário."""
     provider_profile = normalize_provider_profile(provider_profile)
@@ -381,6 +407,19 @@ def deploy_model(
         headers["X-Mirai-Model-Name"] = artifact_path.name
     if device.token:
         headers["Authorization"] = f"Bearer {device.token}"
+    if signature_path is not None:
+        try:
+            signature = signature_path.expanduser().read_bytes()
+        except OSError as error:
+            raise MiraiRuntimeError(
+                f"não foi possível ler a assinatura: {error}"
+            ) from error
+        if not signature:
+            raise MiraiRuntimeError("arquivo de assinatura vazio")
+        encoded_signature = base64.b64encode(signature).decode("ascii")
+        if len(encoded_signature) > MAX_SIGNATURE_HEADER_CHARS:
+            raise MiraiRuntimeError("arquivo de assinatura excede o limite do Agent")
+        headers["X-Mirai-Signature"] = encoded_signature
 
     try:
         connection, prefix = _connection(device)

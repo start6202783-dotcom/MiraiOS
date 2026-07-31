@@ -5,6 +5,65 @@ Todas as mudanças relevantes do MiraiOS serão documentadas neste arquivo.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e
 o projeto utiliza [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.12.0] - 2026-07-31
+
+### Adicionado
+
+- Mirai Shield, uma fronteira de admissão, quarentena, integridade e auditoria
+  antes do runtime;
+- política `open` ou `signed` no Agent, com trust store de chaves públicas e
+  envio destacado da assinatura pelo comando `mirai deploy --signature`;
+- quarentena ONNX com `external_data` proibido, inspeção recursiva de
+  subgrafos e budgets de nós, rank, elementos e inicializadores;
+- codec JSON estrito compartilhado para recusar UTF-8 inválido, nomes
+  duplicados, números não finitos e estruturas excessivas;
+- primitivas de escrita atômica e digest estável com temporário exclusivo,
+  `fsync`, verificação de metadados e proteção contra links quando disponível;
+- arquivos instalados por conteúdo, somente leitura e revalidados antes de
+  ativação e inferência;
+- cadeia de auditoria SHA-256 com sequência, hash anterior, checkpoint durável
+  e endpoint autenticado `/v1/audit`;
+- limites de timeout, fila, requisições simultâneas e trabalhos pesados;
+- corpus determinístico de 1.024 entradas hostis e testes de propriedades com
+  cerca de 900 exemplos reproduzíveis;
+- documento de arquitetura, modelo de ameaças e pesquisa de engenharia com
+  fontes primárias e decisões explícitas;
+- Dependabot para pip e GitHub Actions.
+
+### Segurança
+
+- uma assinatura enviada nunca é ignorada silenciosamente: falha de transporte,
+  chave, claim ou digest recusa o deploy;
+- o modo `signed` recusa ONNX avulso e pacotes sem assinatura antes da
+  instalação;
+- o carregador ONNX não resolve arquivos externos durante a inspeção;
+- alteração em disco invalida o cache de integridade e força novo SHA-256;
+- a auditoria detecta edição, reordenação, divergência e truncamento comum;
+- o servidor reduz vazamento de versão e aplica cabeçalhos defensivos;
+- Ruff, mypy, Bandit, pip-audit e cobertura de branches passaram a bloquear o
+  CI;
+- GitHub Actions de terceiros passaram a usar SHAs completos e permissões
+  mínimas.
+
+### Qualidade
+
+- a suíte passou de 180 para 1.239 testes pytest, todos aprovados em validação
+  local;
+- o CI continua cobrindo Python 3.10–3.13 e ARM64 Linux nativo;
+- cobertura de branches passa a exigir no mínimo 75%;
+- análise estática não possui alertas conhecidos no código da v0.12.
+
+### Compatibilidade e limites
+
+- Mirai Package permanece no formato v1 e o modo de admissão padrão é `open`;
+- a quarentena reduz classes de abuso, mas não é sandbox nem prova de que um
+  modelo desconhecido é seguro;
+- `http.server` continua restrito a laboratório e redes privadas;
+- cadeia e checkpoint locais não resistem a um administrador que controle o
+  dispositivo; ancoragem externa permanece futura;
+- a implementação é inspirada por TUF, Uptane, OCI e Sigstore, mas não declara
+  compatibilidade com esses protocolos.
+
 ## [0.11.0] - 2026-07-31
 
 ### Adicionado
@@ -277,3 +336,4 @@ o projeto utiliza [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 [0.9.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.8.0...v0.9.0
 [0.10.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.9.0...v0.10.0
 [0.11.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.10.0...v0.11.0
+[0.12.0]: https://github.com/start6202783-dotcom/MiraiOS/compare/v0.11.0...v0.12.0

@@ -16,7 +16,7 @@ em dispositivos Edge.**
 [Começar](#comece-em-3-minutos) ·
 [Mirai Pilot](#mirai-pilot) ·
 [Parear](#conecte-um-dispositivo-na-rede) ·
-[Confiança v0.11](#o-marco-da-v011) ·
+[Mirai Shield](#o-marco-da-v012) ·
 [Arquitetura](#arquitetura) ·
 [CLI](#comandos) ·
 [Roadmap](#roadmap)
@@ -42,27 +42,29 @@ começar.
 > **Do modelo ao dispositivo físico em um único fluxo verificável, com
 > critérios e rollback.**
 
-## O marco da v0.11
+## O marco da v0.12
 
 ![Demonstração do Mirai Package no MiraiOS](https://raw.githubusercontent.com/start6202783-dotcom/MiraiOS/main/docs/assets/miraios-demo.gif)
 
-A v0.11 torna o **Mirai Pilot** verificável e amplia o Agent para arquivos,
-papéis, retenção e hardware explícito. O fluxo continua pequeno, mas agora
-responde quatro perguntas fundamentais: quem assinou, quem pode agir, o que
-foi executado e em qual classe de hardware.
+A v0.12 introduz o **Mirai Shield**, uma fronteira de admissão e integridade
+entre um artefato recebido e o runtime. O objetivo não é declarar que um
+modelo desconhecido é seguro; é eliminar ambiguidades, limitar trabalho,
+registrar decisões e impedir que um pacote não autorizado chegue
+silenciosamente à inferência.
 
 | Etapa | O que acontece |
 | --- | --- |
-| **Assine** | Ed25519 + DSSE protege pacotes e relatórios sem alterar o `.mirai`. |
-| **Autorize** | `viewer`, `operator` e `admin` limitam cada cliente pareado. |
-| **Envie** | Imagem, JSON e NPY recebem hash, limites e validação do conteúdo. |
-| **Escolha** | CPU, CUDA ou DirectML é declarado; ausência não vira fallback oculto. |
-| **Observe** | Histórico, retenção e visão concorrente da frota reduzem trabalho manual. |
-| **Valide** | A suíte completa roda também em um runner Linux ARM64 nativo. |
+| **Admita** | O modo `signed` aceita somente `.mirai` com DSSE/Ed25519 válido por uma chave confiável. |
+| **Coloque em quarentena** | ONNX é carregado sem dados externos e recebe limites de grafo, rank, tensores e inicializadores antes do runtime. |
+| **Fixe a identidade** | Pacote e modelo são instalados por conteúdo, somente leitura, e verificados novamente antes de ativar ou inferir. |
+| **Registre** | Cada evento entra em uma cadeia SHA-256 com sequência, hash anterior e checkpoint durável. |
+| **Limite** | Timeout, fila, concorrência de requisições e operações pesadas reduzem abuso de recursos. |
+| **Teste** | 1.239 testes, incluindo um corpus determinístico com 1.024 casos hostis e propriedades geradas. |
 
-O desenho, os limites e o modelo de ameaças estão documentados em
-[Projeto Hikari v0.11](docs/hikari-v0.11.md). O fluxo de aceite que originou o
-Pilot permanece em [Projeto Hikari v0.10](docs/hikari-v0.10.md).
+O desenho e as decisões estão em [Projeto Hikari v0.12](docs/hikari-v0.12.md),
+o modelo de ameaças em [docs/threat-model.md](docs/threat-model.md) e a
+pesquisa que orientou a implementação em
+[Mirai Shield: referências e decisões](docs/research/0001-mirai-shield.md).
 
 ## Por que este projeto existe
 
@@ -87,7 +89,7 @@ Pilot permanece em [Projeto Hikari v0.10](docs/hikari-v0.10.md).
 
 ## Status atual
 
-| Capacidade | v0.11 |
+| Capacidade | v0.12 |
 | --- | --- |
 | Validação estrutural com `onnx.checker` | Pronto |
 | Pacote `.mirai` determinístico com manifesto estrito | Pronto |
@@ -105,6 +107,12 @@ Pilot permanece em [Projeto Hikari v0.10](docs/hikari-v0.10.md).
 | Benchmark remoto e relatórios JSON/Markdown | Pronto |
 | Rollback automático após reprovação | Pronto |
 | Assinatura Ed25519/DSSE destacada | Pronto |
+| Admissão obrigatória por assinatura e trust store local | Pronto; opt-in com `--admission signed` |
+| Quarentena estrutural ONNX e rejeição de dados externos | Pronto |
+| JSON estrito com limites e nomes únicos | Pronto |
+| Instalação atômica, content-addressed e revalidação em uso | Pronto |
+| Auditoria encadeada com checkpoint e endpoint de verificação | Pronto |
+| Limites de fila, sockets, requisições e trabalho pesado | Pronto |
 | Histórico e retenção segura | Pronto |
 | RBAC, rate limit e rotação de identidade | Pronto |
 | PNG/JPEG/BMP/WebP/JSON/NPY em inferência remota | Pronto |
@@ -113,7 +121,7 @@ Pilot permanece em [Projeto Hikari v0.10](docs/hikari-v0.10.md).
 | ARM64 Linux / ONNX Runtime CPU | Job nativo no CI |
 | Plugins de runtime e RISC-V | Experimental, não validado |
 
-O projeto está em estágio **alpha**. A v0.11 foi desenhada para laboratório,
+O projeto está em estágio **alpha**. A v0.12 foi desenhada para laboratório,
 localhost e redes privadas controladas; ela ainda não é um gateway para
 exposição direta à internet.
 
@@ -126,6 +134,7 @@ flowchart TD
     REG["Registro local protegido"]
     LINK["Hikari Link<br/>TLS + pinning + token"]
     TRUST["Trust<br/>Ed25519 + DSSE + RBAC"]
+    SHIELD["Mirai Shield<br/>admissão + quarentena + integridade"]
     API["Mirai Agent API v1"]
     PKG["Mirai Package<br/>manifesto + ONNX + SHA-256"]
     LIFE["Lifecycle persistente"]
@@ -140,8 +149,10 @@ flowchart TD
     CLI --> PKG
     PKG --> LINK
     TRUST --> PKG
+    PKG --> SHIELD
+    SHIELD --> API
     PILOT --> LINK
-    LINK --> API
+    LINK --> SHIELD
     INPUT --> API
     API --> LIFE
     FLEET --> API
@@ -159,9 +170,11 @@ O Agent usa armazenamento simples e inspecionável:
 | `packages/` | Pacotes `.mirai` originais identificados pelo hash. |
 | `models/` | Modelos ONNX validados e identificados pelo hash. |
 | `deployments.json` | Deployments, estados e seleção ativa. |
-| `events.jsonl` | Histórico de pareamentos, deploys, ativações e inferências. |
+| `audit.jsonl` + `audit.jsonl.head` | Cadeia verificável de eventos e checkpoint do head. |
+| `events.jsonl` | Histórico legado, preservado durante a migração. |
 
-Confiança, anexos e frota estão especificados em
+Admissão, quarentena e integridade estão especificadas em
+[Projeto Hikari v0.12](docs/hikari-v0.12.md), confiança, anexos e frota em
 [Projeto Hikari v0.11](docs/hikari-v0.11.md), o piloto em
 [Projeto Hikari v0.10](docs/hikari-v0.10.md), o
 formato em [Projeto Hikari v0.9](docs/hikari-v0.9.md) e o
@@ -226,6 +239,33 @@ mirai launch dummy-1.0.0.mirai --device local --input 5.0
 O modelo de exemplo soma `1` à entrada, portanto o resultado esperado é
 `6.0`. O `launch` valida o pacote e o dispositivo, faz deploy, ativa e testa o
 modelo. Se o teste final falhar, ele restaura a ativação anterior.
+
+### Exija artefatos assinados
+
+Crie uma chave de release na máquina do operador, assine o pacote e configure
+no Agent somente a chave pública:
+
+```bash
+mirai key generate release
+mirai sign dummy-1.0.0.mirai --key ~/.mirai/keys/release.key
+
+mirai agent start \
+  --admission signed \
+  --trust-key ~/.mirai/keys/release.pub
+```
+
+No outro terminal, envie o pacote e o envelope destacado:
+
+```bash
+mirai deploy dummy-1.0.0.mirai \
+  --device local \
+  --signature dummy-1.0.0.mirai.sig
+```
+
+Nesse modo, ONNX avulso, assinatura ausente, chave desconhecida, digest
+alterado e nome de artefato divergente são recusados antes da instalação.
+Distribua a chave pública por um canal já confiável e mantenha a chave privada
+fora do dispositivo Edge.
 
 ## Mirai Pilot
 
@@ -324,13 +364,14 @@ pareamento com fingerprint.
 | `mirai sign/verify ARQUIVO ...` | Assina ou verifica pacote/relatório com DSSE. |
 | `mirai agent start` | Inicia o Agent local. |
 | `mirai agent start --host 0.0.0.0` | Inicia um Agent HTTPS pareável. |
+| `mirai agent start --admission signed --trust-key release.pub` | Exige pacote assinado por chave confiável. |
 | `mirai device add/list/info/remove` | Gerencia destinos locais. |
 | `mirai device pair edge ...` | Verifica e pareia um Agent HTTPS. |
 | `mirai device revoke edge` | Revoga o token e remove o cadastro. |
 | `mirai device clients/role edge ...` | Administra papéis dos clientes pareados. |
 | `mirai device discover` | Encontra candidatos mDNS sem confiar neles. |
 | `mirai doctor --device edge` | Diagnostica canal, versões e runtime. |
-| `mirai deploy ARQUIVO --device edge --provider-profile cpu` | Envia com provider explícito. |
+| `mirai deploy ARQUIVO --device edge --signature ARQUIVO.sig` | Envia artefato e assinatura destacada. |
 | `mirai cleanup --device edge --keep 5` | Simula/aplica retenção de deployments. |
 | `mirai fleet status` | Consulta a frota em paralelo, preservando hosts offline. |
 | `mirai runtime list` | Lista ONNX e plugins experimentais descobertos. |
@@ -461,6 +502,21 @@ acesso pela rede:
 - respostas da API usam `Cache-Control: no-store`;
 - pacotes recusam arquivos extras, duplicados, links, compressão e manifesto
   fora do schema;
+- a política `signed` liga nome, tamanho e SHA-256 do `.mirai` a um envelope
+  DSSE/Ed25519 e recusa assinatura não solicitada inválida;
+- ONNX é aberto com `load_external_data=False`; qualquer tensor com dados
+  externos, grafo profundo, rank extremo ou orçamento estrutural excedido é
+  recusado antes de criar uma sessão;
+- JSON de rede, assinatura, registro e auditoria recusa UTF-8 inválido,
+  chaves duplicadas, `NaN`, `Infinity`, profundidade e volume excessivos;
+- arquivos de estado usam troca atômica, `fsync`, temporários exclusivos e
+  verificação contra alteração durante a leitura;
+- pacote e modelo instalados são identificados pelo conteúdo, marcados como
+  somente leitura e revalidados antes de ativação e inferência;
+- o log de auditoria encadeia cada evento ao anterior e mantém um checkpoint
+  durável para detectar edição, reordenação, divergência e truncamento;
+- o servidor limita sockets lentos, fila, requisições simultâneas e trabalhos
+  pesados, retornando erro em vez de criar trabalho ilimitado;
 - o hash interno protege o ONNX e o contrato declarado é comparado ao runtime;
 - Ed25519 e DSSE assinam digests tipados de pacotes e relatórios;
 - uploads remotos têm allowlist, hash, limites, validação de conteúdo e vida
@@ -472,11 +528,24 @@ acesso pela rede:
 - relatórios não recebem token, código de pareamento ou chave privada e, por
   padrão, ocultam as entradas de inferência.
 
-Ainda não há autoridade certificadora, mTLS, rotação automática, malware
-scanning, transparência de assinaturas ou cofre de chaves. A assinatura prova
-posse da chave, mas a distribuição confiável da chave pública continua sendo
-responsabilidade do operador. Use firewall, mantenha a porta em uma rede
-privada e não exponha o Agent diretamente à internet.
+### Limites honestos da fronteira
+
+- O Agent usa `http.server`, que a documentação do Python não recomenda para
+  produção. Use somente localhost ou rede privada com firewall.
+- A quarentena estrutural reduz risco, mas não é sandbox de processo, cgroup,
+  seccomp, antivírus nem prova de que um ONNX desconhecido é benigno.
+- O checkpoint detecta corrupção acidental e adulteração local comum. Um
+  invasor com controle administrativo sobre o dispositivo pode reescrever o
+  log e o checkpoint; resistência a esse cenário exige ancorar o head fora do
+  Agent.
+- DSSE prova posse da chave configurada, não a identidade humana por trás
+  dela. Distribuição, revogação e guarda das chaves continuam sendo tarefas do
+  operador.
+- Ainda não há mTLS, autoridade certificadora, transparência pública,
+  isolamento por processo ou cofre de chaves.
+
+Leia o [modelo de ameaças completo](docs/threat-model.md). Não exponha o Agent
+diretamente à internet.
 
 ## Roadmap
 
@@ -496,11 +565,16 @@ privada e não exponha o Agent diretamente à internet.
   benchmark remoto, critérios, evidências e rollback automático.
 - [x] **v0.11 — Confiança e frota:** Ed25519/DSSE, RBAC, rotação, rate limit,
   anexos seguros, retenção, frota, providers explícitos e CI ARM64.
+- [x] **v0.12 — Mirai Shield:** admissão assinada, quarentena ONNX, JSON
+  estrito, instalação atômica, revalidação em uso, auditoria encadeada,
+  limites de recursos e gates de qualidade.
 
 ### Próximo
 
-- [ ] Trust store e políticas para exigir assinatura antes do deploy.
 - [ ] mTLS e rotação automatizada, com recuperação documentada.
+- [ ] Ancoragem externa do head de auditoria e política de revogação de chaves.
+- [ ] Isolamento do runtime em processo dedicado com limites do sistema
+  operacional e reinício supervisionado.
 - [ ] Dashboard web local sobre a API de frota.
 - [ ] Testes físicos publicados para NVIDIA CUDA e Windows DirectML/WinML.
 - [ ] Assinatura e distribuição de plugins de runtime.
@@ -516,11 +590,18 @@ Instale as dependências de desenvolvimento e execute a suíte:
 ```bash
 python -m pip install --editable ".[dev]"
 python -m compileall -q src tests scripts
-python -m pytest
+python -m ruff check src tests
+python -m mypy src/mirai
+python -m bandit -q -r src/mirai
+python -m pip_audit --requirement requirements.txt
+python -m coverage run -m pytest
+python -m coverage report
 ```
 
-O CI executa 180 testes em Python 3.10, 3.11, 3.12 e 3.13 no Linux x86-64 e a
-suíte completa em Linux ARM64 nativo. Consulte
+O CI executa **1.239 testes** em Python 3.10, 3.11, 3.12 e 3.13 no Linux
+x86-64, repete a suíte em Linux ARM64 nativo e exige no mínimo 75% de cobertura
+de branches. Actions de terceiros são fixadas por SHA completo e o Dependabot
+acompanha dependências Python e workflows. Consulte
 [CONTRIBUTING.md](CONTRIBUTING.md) antes de enviar mudanças.
 
 Os ativos visuais do README são reproduzíveis:
@@ -543,6 +624,9 @@ Documentação dos marcos:
 - [v0.9 — Mirai Package](docs/hikari-v0.9.md)
 - [v0.10 — Mirai Pilot](docs/hikari-v0.10.md)
 - [v0.11 — Trust, Fleet e Secure Inputs](docs/hikari-v0.11.md)
+- [v0.12 — Mirai Shield](docs/hikari-v0.12.md)
+- [Modelo de ameaças](docs/threat-model.md)
+- [Pesquisa e decisões do Mirai Shield](docs/research/0001-mirai-shield.md)
 - [Changelog completo](CHANGELOG.md)
 - [Política de segurança](SECURITY.md)
 

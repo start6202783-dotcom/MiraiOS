@@ -11,9 +11,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from .errors import MiraiRuntimeError
-from .security import normalize_fingerprint
-from .security import ACCESS_ROLES
-
+from .security import ACCESS_ROLES, normalize_fingerprint
 
 DEVICE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,256}$")
@@ -128,10 +126,13 @@ def _normalize_optional_credentials(
         raise MiraiRuntimeError(
             "credenciais do dispositivo estão incompletas"
         )
-    assert token is not None
-    assert tls_fingerprint is not None
-    assert agent_id is not None
-    assert client_id is not None
+    if (
+        not isinstance(token, str)
+        or not isinstance(tls_fingerprint, str)
+        or not isinstance(agent_id, str)
+        or not isinstance(client_id, str)
+    ):
+        raise MiraiRuntimeError("credenciais do dispositivo estão incompletas")
     if urlsplit(url).scheme != "https":
         raise MiraiRuntimeError(
             "credenciais de pareamento só podem ser usadas com HTTPS"

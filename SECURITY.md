@@ -8,8 +8,8 @@ receber suporte.
 
 | Série | Correções de segurança |
 | --- | --- |
-| 0.11.x | Sim |
-| 0.10.x e anteriores | Não |
+| 0.12.x | Sim |
+| 0.11.x e anteriores | Não |
 
 ## Como relatar
 
@@ -33,11 +33,14 @@ pedindo um canal privado, sem incluir detalhes técnicos da vulnerabilidade.
 - verificação incorreta de hash ou assinatura;
 - exposição de tokens, chaves privadas ou entradas ocultadas de relatório;
 - remoção do deployment ativo ou de arquivos fora da política de retenção.
+- bypass da política `signed`, trust store ou quarentena estrutural;
+- adulteração não detectada entre deploy, ativação e inferência;
+- divergência, truncamento ou edição não detectada da cadeia de auditoria.
 
 ## Limites conhecidos
 
 O Agent deve operar em localhost ou rede privada protegida por firewall. A
-v0.11 não oferece gateway público, autoridade certificadora, mTLS, antivírus,
-cofre de chaves ou sandbox de decodificadores. mDNS encontra candidatos, mas
-não autentica dispositivos. Consulte o modelo de ameaças em
-[docs/hikari-v0.11.md](docs/hikari-v0.11.md).
+v0.12 não oferece gateway público, autoridade certificadora, mTLS, antivírus,
+cofre de chaves, isolamento de processo ou ancoragem externa automática da
+auditoria. mDNS encontra candidatos, mas não autentica dispositivos. Consulte
+o [modelo de ameaças](docs/threat-model.md).

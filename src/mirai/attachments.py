@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import re
 import tempfile
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from .errors import MiraiRuntimeError
-
+from .json_codec import strict_json_dumps, strict_json_loads
 
 ATTACHMENT_EXTENSIONS = {
     ".png": "image/png",
@@ -97,27 +97,13 @@ def encode_remote_inputs(
 
 
 def _strict_json(content: bytes) -> str:
-    try:
-        parsed = json.loads(
-            content.decode("utf-8"),
-            parse_constant=lambda value: (_ for _ in ()).throw(
-                ValueError(f"número não finito: {value}")
-            ),
-        )
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
-        raise MiraiRuntimeError(f"anexo JSON inválido: {error}") from error
-    return json.dumps(
-        parsed,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
+    parsed = strict_json_loads(content, label="anexo JSON")
+    return strict_json_dumps(parsed)
 
 
 def _validate_image(path: Path, expected_media_type: str) -> None:
     try:
-        from PIL import Image
-        from PIL import UnidentifiedImageError
+        from PIL import Image, UnidentifiedImageError
     except ModuleNotFoundError as error:
         raise MiraiRuntimeError(
             "a dependência 'Pillow' é necessária para validar imagens"
@@ -267,7 +253,8 @@ def materialize_remote_inputs(
                 raise MiraiRuntimeError(
                     "arquivos remotos devem ser enviados como anexos validados"
                 )
-            assert rewritten is not None
+            if rewritten is None:
+                raise MiraiRuntimeError("lista de entradas remotas inconsistente")
             rewritten.append(
                 f"{input_name}={raw_value}" if input_name is not None else raw_value
             )

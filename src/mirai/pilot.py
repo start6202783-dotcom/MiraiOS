@@ -7,11 +7,12 @@ import math
 import os
 import re
 import uuid
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from .agent_client import (
     activate_deployment,
@@ -28,7 +29,6 @@ from .inspect import validate_artifact
 from .package import MIRAI_EXTENSION, calculate_sha256, load_mirai_package
 from .providers import normalize_provider_profile
 from .signing import sign_artifact
-
 
 PILOT_SCHEMA_VERSION = 1
 DEFAULT_PILOT_CONFIG = Path("mirai-pilot.json")
@@ -341,6 +341,8 @@ def load_pilot_config(path: Path = DEFAULT_PILOT_CONFIG) -> PilotConfig:
         "report.directory",
     )
     raw_signing_key = report_payload.get("signing_key")
+    if raw_signing_key is not None and not isinstance(raw_signing_key, str):
+        raise MiraiRuntimeError("'report.signing_key' deve ser texto")
     signing_key_path = (
         _resolve_relative(
             source_path.parent,
@@ -350,9 +352,12 @@ def load_pilot_config(path: Path = DEFAULT_PILOT_CONFIG) -> PilotConfig:
         if raw_signing_key is not None
         else None
     )
+    raw_artifact = payload.get("artifact")
+    if not isinstance(raw_artifact, str):
+        raise MiraiRuntimeError("'artifact' deve ser texto")
     artifact_path = _resolve_relative(
         source_path.parent,
-        payload.get("artifact"),
+        raw_artifact,
         "artifact",
     )
     return PilotConfig(
@@ -574,7 +579,7 @@ def _results_match(actual: Any, expected: Any, tolerance: float) -> bool:
     if isinstance(actual, list) and isinstance(expected, list):
         return len(actual) == len(expected) and all(
             _results_match(left, right, tolerance)
-            for left, right in zip(actual, expected)
+            for left, right in zip(actual, expected, strict=False)
         )
     if isinstance(actual, dict) and isinstance(expected, dict):
         return set(actual) == set(expected) and all(
@@ -709,7 +714,7 @@ def _stage(
     try:
         result = operation()
         selected = details(result) if details is not None else None
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - registra qualquer falha da etapa.
         item["status"] = "failed"
         item["duration_ms"] = (perf_counter() - started) * 1000
         item["error"] = str(error)
@@ -799,8 +804,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
                 "## Rollback",
                 "",
                 f"- Status: {rollback.get('status', 'desconhecido')}",
-                "- Deployment restaurado: "
-                f"{rollback.get('restored_deployment_id') or 'nenhum'}",
+                ("- Deployment restaurado: "
+                f"{rollback.get('restored_deployment_id') or 'nenhum'}"),
             ]
         )
 
@@ -1019,7 +1024,7 @@ def run_pilot(config: PilotConfig) -> PilotOutcome:
                 "o deployment aprovado não permaneceu ativo no dispositivo"
             )
         report["status"] = "passed"
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - transação precisa acionar rollback.
         report["status"] = "failed"
         report["error"] = str(error)
         if device is not None and deployed_id is not None:
@@ -1034,7 +1039,7 @@ def run_pilot(config: PilotConfig) -> PilotOutcome:
                     ),
                     lambda value: value,
                 )
-            except Exception as rollback_error:
+            except Exception as rollback_error:  # noqa: BLE001 - preserva a falha original.
                 report["rollback"] = {
                     "status": "failed",
                     "error": str(rollback_error),

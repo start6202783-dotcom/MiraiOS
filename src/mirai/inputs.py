@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from .errors import MiraiRuntimeError
-
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 NUMPY_EXTENSIONS = {".npy"}
@@ -40,7 +40,7 @@ def numpy_dtype(type_name: str, np: Any) -> Any:
         ) from error
 
 
-def _is_fixed_dimension(dimension: object) -> bool:
+def _is_fixed_dimension(dimension: object) -> TypeGuard[int]:
     return isinstance(dimension, int) and dimension > 0
 
 
@@ -61,7 +61,7 @@ def _validate_tensor_shape(array: Any, input_meta: Any) -> None:
 
     incompatible = [
         (index, actual, wanted)
-        for index, (actual, wanted) in enumerate(zip(array.shape, expected))
+        for index, (actual, wanted) in enumerate(zip(array.shape, expected, strict=False))
         if _is_fixed_dimension(wanted) and actual != wanted
     ]
     if incompatible:
@@ -136,7 +136,7 @@ def process_numpy_input(path: Path, input_meta: Any, np: Any) -> Any:
     return array
 
 
-def detect_image_layout(shape: list[object], requested: str) -> str:
+def detect_image_layout(shape: Sequence[object], requested: str) -> str:
     """Detecta NCHW/NHWC ou respeita o layout explicitamente solicitado."""
     if len(shape) != 4:
         raise MiraiRuntimeError(
@@ -211,7 +211,7 @@ def process_image_input(
         with Image.open(image_path) as source:
             image = source.convert(image_mode).resize((width, height))
             array = np.asarray(image)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - Pillow/plugins podem falhar de vários modos.
         raise MiraiRuntimeError(f"falha ao abrir a imagem: {error}") from error
 
     if channel_count == 1:
@@ -285,7 +285,7 @@ def resolve_input_specs(
     if len(positional) > len(remaining):
         raise MiraiRuntimeError("foram informados mais valores do que entradas")
 
-    for name, value in zip(remaining, positional):
+    for name, value in zip(remaining, positional, strict=False):
         assigned[name] = value
 
     missing = [

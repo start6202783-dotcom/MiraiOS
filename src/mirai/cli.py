@@ -12,10 +12,10 @@ from . import __version__
 from .agent import run_agent
 from .agent_client import (
     activate_deployment,
-    deploy_model,
-    doctor_device,
     delete_deployment,
+    deploy_model,
     deployment_retention_candidates,
+    doctor_device,
     get_agent_clients,
     get_agent_info,
     get_agent_logs,
@@ -30,25 +30,24 @@ from .benchmark import (
     DEFAULT_WARMUP_RUNS,
     benchmark_model,
 )
-from .devices import add_device, get_device, load_devices, remove_device
-from .devices import mirai_home
+from .devices import add_device, get_device, load_devices, mirai_home, remove_device
 from .discovery import discover_agents
 from .errors import MiraiRuntimeError
-from .inspect import show_artifact_info, validate_artifact
 from .fleet import inspect_fleet
 from .history import (
     get_pilot_report,
     list_pilot_history,
     prune_pilot_history,
 )
+from .inspect import show_artifact_info, validate_artifact
 from .package import (
     MIRAI_EXTENSION,
     create_mirai_package,
     validate_package_metadata,
 )
 from .pilot import (
-    DEFAULT_REPORT_DIRECTORY,
     DEFAULT_PILOT_CONFIG,
+    DEFAULT_REPORT_DIRECTORY,
     launch_artifact,
     load_pilot_config,
     run_pilot,
@@ -63,7 +62,6 @@ from .signing import (
     signing_key_paths,
     verify_artifact,
 )
-
 
 VERSION = f"MiraiOS CLI v{__version__} (Projeto Hikari)"
 
@@ -497,6 +495,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=tuple(PROVIDER_PROFILES),
         default="auto",
     )
+    deploy_parser.add_argument(
+        "--signature",
+        type=Path,
+        metavar="ARQUIVO.sig",
+        help="envelope DSSE usado por Agents com admissão signed",
+    )
 
     cleanup_parser = subparsers.add_parser(
         "cleanup",
@@ -618,6 +622,20 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="anuncia o Agent via mDNS (não substitui o pareamento)",
     )
+    agent_start_parser.add_argument(
+        "--admission",
+        choices=("open", "signed"),
+        default="open",
+        help="signed aceita somente pacotes .mirai assinados",
+    )
+    agent_start_parser.add_argument(
+        "--trust-key",
+        action="append",
+        type=Path,
+        default=[],
+        metavar="CHAVE.pub",
+        help="chave Ed25519 confiável; a opção pode ser repetida",
+    )
     agent_rotate_parser = agent_subparsers.add_parser(
         "rotate-identity",
         help="troca certificado e invalida todos os clientes pareados",
@@ -652,7 +670,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_path = args.output or Path(
                 f"{args.name}-{args.package_version}{MIRAI_EXTENSION}"
             )
-            package = create_mirai_package(
+            created_package = create_mirai_package(
                 args.model_path,
                 output_path,
                 name=args.name,
@@ -666,14 +684,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 replace=args.replace,
             )
             print(
-                f"[MiraiOS] Pacote criado: {package.path} "
-                f"({package.name} v{package.version})"
+                f"[MiraiOS] Pacote criado: {created_package.path} "
+                f"({created_package.name} v{created_package.version})"
             )
-            print(f"[MiraiOS] SHA-256: {package.sha256}")
+            print(f"[MiraiOS] SHA-256: {created_package.sha256}")
             print(
                 "[MiraiOS] Modelo: "
-                f"{package.model_name} "
-                f"({package.manifest['model']['sha256']})"
+                f"{created_package.model_name} "
+                f"({created_package.manifest['model']['sha256']})"
             )
             return 0
 
@@ -690,15 +708,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.command == "sign":
-            signed = sign_artifact(
+            signed_artifact = sign_artifact(
                 args.artifact_path,
                 args.key,
                 args.output,
                 replace=args.replace,
             )
-            print(f"[MiraiOS] Assinatura DSSE: {signed['signature']}")
-            print(f"[MiraiOS] Key ID: {signed['key_id']}")
-            print(f"[MiraiOS] SHA-256: {signed['payload']['sha256']}")
+            print(f"[MiraiOS] Assinatura DSSE: {signed_artifact['signature']}")
+            print(f"[MiraiOS] Key ID: {signed_artifact['key_id']}")
+            print(f"[MiraiOS] SHA-256: {signed_artifact['payload']['sha256']}")
             return 0
 
         if args.command == "verify":
@@ -840,20 +858,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 0
 
             if args.pilot_command == "history":
-                entries = list_pilot_history(
+                pilot_entries = list_pilot_history(
                     args.directory,
                     limit=args.limit,
                     status=args.status,
                 )
-                if not entries:
+                if not pilot_entries:
                     print("[MiraiOS] Nenhum piloto encontrado.")
                     return 0
                 print("[MiraiOS] Histórico de pilotos:")
-                for entry in entries:
-                    signed = "assinado" if Path(entry["signature"]).is_file() else "sem assinatura"
+                for pilot_entry in pilot_entries:
+                    signature_status = (
+                        "assinado"
+                        if Path(pilot_entry["signature"]).is_file()
+                        else "sem assinatura"
+                    )
                     print(
-                        f"- {entry['run_id']} | {entry['project']} | "
-                        f"{entry['status']} | {entry.get('device') or '-'} | {signed}"
+                        f"- {pilot_entry['run_id']} | {pilot_entry['project']} | "
+                        f"{pilot_entry['status']} | {pilot_entry.get('device') or '-'} | "
+                        f"{signature_status}"
                     )
                 return 0
 
@@ -863,16 +886,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 0
 
             if args.pilot_command == "prune":
-                candidates = prune_pilot_history(
+                pilot_candidates = prune_pilot_history(
                     args.directory,
                     keep=args.keep,
                     apply=args.apply,
                 )
                 action = "Removidos" if args.apply else "Seriam removidos"
-                print(f"[MiraiOS] {action}: {len(candidates)} arquivo(s).")
-                for candidate in candidates:
-                    print(f"- {candidate}")
-                if not args.apply and candidates:
+                print(f"[MiraiOS] {action}: {len(pilot_candidates)} arquivo(s).")
+                for pilot_candidate in pilot_candidates:
+                    print(f"- {pilot_candidate}")
+                if not args.apply and pilot_candidates:
                     print("[MiraiOS] Revise e repita com --apply para confirmar.")
                 return 0
 
@@ -947,8 +970,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "[MiraiOS] Arquitetura: "
                     f"{info.get('machine', 'desconhecida')}"
                 )
-                providers = info.get("providers") or []
-                provider_text = ", ".join(providers) if providers else "nenhum"
+                device_providers = info.get("providers") or []
+                provider_text = ", ".join(device_providers) if device_providers else "nenhum"
                 print(f"[MiraiOS] Providers: {provider_text}")
                 return 0
 
@@ -994,15 +1017,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 0
 
             if args.device_command == "discover":
-                candidates = discover_agents(args.timeout)
-                if not candidates:
+                discovered_candidates = discover_agents(args.timeout)
+                if not discovered_candidates:
                     print("[MiraiOS] Nenhum candidato mDNS encontrado.")
                     return 0
                 print("[MiraiOS] Candidatos não confiáveis (pareamento obrigatório):")
-                for candidate in candidates:
+                for discovered_candidate in discovered_candidates:
                     print(
-                        f"- {candidate.name}: {candidate.url} | "
-                        f"Agent ID {candidate.agent_id or 'não informado'}"
+                        f"- {discovered_candidate.name}: {discovered_candidate.url} | "
+                        f"Agent ID {discovered_candidate.agent_id or 'não informado'}"
                     )
                 return 0
 
@@ -1016,37 +1039,39 @@ def main(argv: Sequence[str] | None = None) -> int:
                 device,
                 args.artifact_path,
                 args.provider_profile,
+                args.signature,
             )
             print(
                 "[MiraiOS] Deployment pronto: "
                 f"{deployment['deployment_id']}"
             )
             print(f"[MiraiOS] SHA-256: {deployment['sha256']}")
-            package = deployment.get("package")
-            if isinstance(package, dict):
+            deployment_package = deployment.get("package")
+            if isinstance(deployment_package, dict):
                 print(
                     "[MiraiOS] Pacote: "
-                    f"{package.get('name')} v{package.get('version')}"
+                    f"{deployment_package.get('name')} v{deployment_package.get('version')}"
                 )
-            providers = deployment.get("providers") or []
-            if providers:
-                print(f"[MiraiOS] Providers: {', '.join(providers)}")
+            deployment_providers = deployment.get("providers") or []
+            if deployment_providers:
+                print(f"[MiraiOS] Providers: {', '.join(deployment_providers)}")
             return 0
 
         if args.command == "cleanup":
             device = get_device(args.device_name)
             status = get_deployment_status(device)
-            candidates = deployment_retention_candidates(status, args.keep)
+            retention_candidates = deployment_retention_candidates(status, args.keep)
             action = "Removendo" if args.apply else "Simulação"
-            print(f"[MiraiOS] {action}: {len(candidates)} deployment(s).")
-            for deployment in candidates:
+            print(f"[MiraiOS] {action}: {len(retention_candidates)} deployment(s).")
+            for retention_deployment in retention_candidates:
                 print(
-                    f"- {deployment['deployment_id']} | {deployment.get('model')} | "
-                    f"{deployment.get('created_at')}"
+                    f"- {retention_deployment['deployment_id']} | "
+                    f"{retention_deployment.get('model')} | "
+                    f"{retention_deployment.get('created_at')}"
                 )
                 if args.apply:
-                    delete_deployment(device, str(deployment["deployment_id"]))
-            if candidates and not args.apply:
+                    delete_deployment(device, str(retention_deployment["deployment_id"]))
+            if retention_candidates and not args.apply:
                 print("[MiraiOS] Revise e repita com --apply para confirmar.")
             return 0
 
@@ -1100,12 +1125,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 0
             for deployment in deployments:
                 marker = "●" if deployment["deployment_id"] == active_id else "○"
-                providers = ", ".join(deployment.get("providers") or [])
-                provider_suffix = f" | {providers}" if providers else ""
-                package = deployment.get("package")
+                status_providers = ", ".join(deployment.get("providers") or [])
+                provider_suffix = f" | {status_providers}" if status_providers else ""
+                status_package = deployment.get("package")
                 package_suffix = (
-                    f" | {package.get('name')} v{package.get('version')}"
-                    if isinstance(package, dict)
+                    f" | {status_package.get('name')} v{status_package.get('version')}"
+                    if isinstance(status_package, dict)
                     else ""
                 )
                 print(
@@ -1139,6 +1164,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             health = report["health"]
             info = report["info"]
             deployments = report["deployments"]
+            audit = report["audit"]
             connection_mode = (
                 "HTTPS com fingerprint fixado"
                 if report["tls"]
@@ -1152,7 +1178,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             compatibility = (
                 "compatível" if report["compatible"] else "incompatível"
             )
-            providers = ", ".join(info.get("providers") or []) or "nenhum"
+            doctor_providers = ", ".join(info.get("providers") or []) or "nenhum"
             print(f"[MiraiOS] Doctor: {device.name}")
             print(f"✓ Conexão: {health.get('status', 'desconhecida')}")
             print(f"✓ Canal: {connection_mode}")
@@ -1163,13 +1189,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{health.get('agent_version', 'desconhecida')} "
                 f"({compatibility})"
             )
-            print(f"✓ Runtime: {providers}")
+            print(f"✓ Runtime: {doctor_providers}")
             print(
                 "✓ Deployments: "
                 f"{len(deployments.get('deployments') or [])}"
             )
             active_id = deployments.get("active_deployment_id")
             print(f"✓ Ativo: {active_id or 'nenhum'}")
+            print(
+                "✓ Auditoria: "
+                f"{audit.get('records', 0)} registro(s), "
+                f"head {str(audit.get('head', ''))[:12]}"
+            )
             if not report["compatible"]:
                 raise MiraiRuntimeError(
                     "as versões da CLI e do Agent não são compatíveis"
@@ -1184,6 +1215,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 force_secure=args.secure,
                 pairing_role=args.pairing_role,
                 discoverable=args.discoverable,
+                admission_mode=args.admission,
+                trusted_keys=tuple(args.trust_key),
             )
             return 0
 

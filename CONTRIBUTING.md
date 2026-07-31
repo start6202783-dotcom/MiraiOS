@@ -53,7 +53,12 @@ Antes de enviar sua alteração, execute:
 
 ```bash
 python -m compileall -q src tests scripts
-python -m pytest
+python -m ruff check src tests
+python -m mypy src/mirai
+python -m bandit -q -r src/mirai
+python -m pip_audit --requirement requirements.txt
+python -m coverage run -m pytest
+python -m coverage report
 ```
 
 Teste também os fluxos afetados com o modelo de exemplo:
@@ -80,6 +85,12 @@ mirai run /tmp/dummy-1.0.0.mirai --input 5
 - Não marque hardware como validado sem um teste em runner ou dispositivo da
   arquitetura correspondente.
 - Preserve compatibilidade de leitura do formato `.mirai` v1.
+- Não reduza budgets de segurança ou o piso de cobertura sem justificar a
+  mudança no PR e atualizar o modelo de ameaças.
+- Todo novo parser, upload ou endpoint deve ter limites explícitos e casos
+  negativos.
+- Não implemente criptografia própria; use primitivas revisadas e mantenha
+  política, assinatura e distribuição de chaves como problemas separados.
 - Prefira funções pequenas e módulos com responsabilidade clara.
 - Atualize README e CHANGELOG quando o comportamento público mudar.
 
@@ -101,6 +112,6 @@ O Pull Request deve explicar:
 - limitações conhecidas;
 - comandos usados para validar.
 
-O CI executará a suíte em Python 3.10, 3.11, 3.12 e 3.13 e repetirá todos os
-testes em um runner Linux ARM64. Aguarde todos os checks antes de solicitar a
-revisão final.
+O CI executará 1.239 testes em Python 3.10, 3.11, 3.12 e 3.13, repetirá a
+suíte em Linux ARM64 e bloqueará lint, tipos, segurança, dependências ou
+cobertura abaixo do piso. Aguarde todos os checks antes da revisão final.

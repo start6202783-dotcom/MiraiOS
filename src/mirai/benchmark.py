@@ -11,7 +11,6 @@ from typing import Any
 from .errors import MiraiRuntimeError
 from .runtime import prepare_inference
 
-
 DEFAULT_BENCHMARK_RUNS = 50
 DEFAULT_WARMUP_RUNS = 3
 

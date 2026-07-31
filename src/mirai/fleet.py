@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Callable
+from typing import Any
 
 from .agent_client import doctor_device
 from .devices import Device
@@ -29,7 +30,7 @@ def _inspect_device(
             "deployment_count": len(deployments.get("deployments") or []),
             "error": None,
         }
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - uma falha não derruba a visão da frota.
         return {
             "name": device.name,
             "url": device.url,

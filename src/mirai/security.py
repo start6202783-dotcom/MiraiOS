@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
-import json
 import os
 import re
 import secrets
@@ -18,7 +17,8 @@ from pathlib import Path
 from typing import Any
 
 from .errors import MiraiRuntimeError
-
+from .json_codec import strict_json_dumps, strict_json_loads
+from .storage import atomic_write_bytes
 
 SECURITY_REGISTRY_VERSION = 2
 PAIRING_CODE_TTL_SECONDS = 10 * 60
@@ -129,37 +129,20 @@ def is_loopback_host(host: str | None) -> bool:
 
 
 def _write_bytes_atomic(path: Path, content: bytes, mode: int) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_name(f".{path.name}.tmp")
-    descriptor = os.open(
-        temporary_path,
-        os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-        mode,
-    )
-    try:
-        with os.fdopen(descriptor, "wb") as output:
-            output.write(content)
-        os.replace(temporary_path, path)
-        try:
-            os.chmod(path, mode)
-        except OSError:
-            pass
-    except BaseException:
-        temporary_path.unlink(missing_ok=True)
-        raise
+    atomic_write_bytes(path, content, mode)
 
 
 def _save_private_json(path: Path, payload: dict[str, Any]) -> None:
     encoded = (
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+        strict_json_dumps(payload, pretty=True) + "\n"
     ).encode("utf-8")
     _write_bytes_atomic(path, encoded, 0o600)
 
 
 def _load_json(path: Path, label: str) -> dict[str, Any]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        payload = strict_json_loads(path.read_bytes(), label=label)
+    except (OSError, MiraiRuntimeError) as error:
         raise MiraiRuntimeError(
             f"não foi possível ler {label}: {error}"
         ) from error

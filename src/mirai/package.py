@@ -18,7 +18,7 @@ from typing import Any
 
 from . import __version__
 from .errors import MiraiRuntimeError
-
+from .storage import stable_file_digest
 
 MIRAI_EXTENSION = ".mirai"
 MIRAI_MEDIA_TYPE = "application/vnd.mirai.package+zip"
@@ -76,16 +76,8 @@ class MiraiPackage:
 
 def calculate_sha256(path: Path) -> str:
     """Calcula SHA-256 sem carregar o arquivo inteiro em memória."""
-    digest = hashlib.sha256()
-    try:
-        with path.open("rb") as input_file:
-            for chunk in iter(lambda: input_file.read(1024 * 1024), b""):
-                digest.update(chunk)
-    except OSError as error:
-        raise MiraiRuntimeError(
-            f"não foi possível ler '{path}': {error}"
-        ) from error
-    return digest.hexdigest()
+    digest, _ = stable_file_digest(path)
+    return digest
 
 
 def ensure_package_path(package_path: Path) -> None:
@@ -305,11 +297,14 @@ def _validate_preprocessing(
         raise MiraiRuntimeError(
             f"normalização de '{input_name}' não corresponde aos canais"
         )
-    if "float" not in input_type and "double" not in input_type:
-        if float(scale) != 1 or any(mean) or any(item != 1 for item in std):
-            raise MiraiRuntimeError(
-                f"normalização numérica exige entrada float em '{input_name}'"
-            )
+    if (
+        "float" not in input_type
+        and "double" not in input_type
+        and (float(scale) != 1 or any(mean) or any(item != 1 for item in std))
+    ):
+        raise MiraiRuntimeError(
+            f"normalização numérica exige entrada float em '{input_name}'"
+        )
     return {
         "kind": "image",
         "layout": layout,

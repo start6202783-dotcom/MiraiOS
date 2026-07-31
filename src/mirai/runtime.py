@@ -101,7 +101,7 @@ def prepare_inference(
 def execute_inference(
     session: Any,
     input_feed: dict[str, Any],
-) -> tuple[list[object], float]:
+) -> tuple[list[Any], float]:
     """Executa uma inferência e retorna saídas e latência em milissegundos."""
     started_at = perf_counter()
     try:
@@ -111,7 +111,7 @@ def execute_inference(
     return outputs, (perf_counter() - started_at) * 1000
 
 
-def normalize_inference_result(outputs: list[object]) -> object:
+def normalize_inference_result(outputs: list[Any]) -> object:
     """Converte saídas pequenas em listas e resume tensores extensos."""
     normalized: list[object] = []
     for output in outputs:
