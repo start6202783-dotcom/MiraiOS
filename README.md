@@ -16,7 +16,7 @@ em dispositivos Edge.**
 [Começar](#comece-em-3-minutos) ·
 [Mirai Pilot](#mirai-pilot) ·
 [Parear](#conecte-um-dispositivo-na-rede) ·
-[Demonstração](#o-marco-da-v010) ·
+[Confiança v0.11](#o-marco-da-v011) ·
 [Arquitetura](#arquitetura) ·
 [CLI](#comandos) ·
 [Roadmap](#roadmap)
@@ -30,7 +30,7 @@ modelo ONNX em um artefato distribuível e um serviço de inferência operável
 em Linux:
 
 ```text
-pack → verificação → deploy → health check → benchmark → aceite → evidência
+assinar → verificar → deploy → medir → aceitar → evidência assinada
 ```
 
 A CLI permanece no computador do desenvolvedor. O **Mirai Agent** roda no
@@ -42,27 +42,27 @@ começar.
 > **Do modelo ao dispositivo físico em um único fluxo verificável, com
 > critérios e rollback.**
 
-## O marco da v0.10
+## O marco da v0.11
 
 ![Demonstração do Mirai Package no MiraiOS](https://raw.githubusercontent.com/start6202783-dotcom/MiraiOS/main/docs/assets/miraios-demo.gif)
 
-A v0.10 adiciona o **Mirai Pilot**, uma camada transacional sobre o Mirai
-Package. Em vez de apenas enviar um arquivo, ela executa e documenta um teste
-de aceitação completo no dispositivo:
+A v0.11 torna o **Mirai Pilot** verificável e amplia o Agent para arquivos,
+papéis, retenção e hardware explícito. O fluxo continua pequeno, mas agora
+responde quatro perguntas fundamentais: quem assinou, quem pode agir, o que
+foi executado e em qual classe de hardware.
 
 | Etapa | O que acontece |
 | --- | --- |
-| **Declare** | Um JSON versionado define artefato, destino, entrada e metas. |
-| **Verify** | Artefato, conexão, identidade, versões e runtime são conferidos. |
-| **Launch** | Deploy, ativação e inferência de saúde acontecem em um fluxo. |
-| **Measure** | O Agent mede warm-up, latência, P95 e IPS no hardware real. |
-| **Accept** | Resultado e desempenho são comparados aos critérios declarados. |
-| **Prove** | JSON e Markdown registram as evidências de cada execução. |
-| **Recover** | Uma falha restaura o deployment anterior automaticamente. |
+| **Assine** | Ed25519 + DSSE protege pacotes e relatórios sem alterar o `.mirai`. |
+| **Autorize** | `viewer`, `operator` e `admin` limitam cada cliente pareado. |
+| **Envie** | Imagem, JSON e NPY recebem hash, limites e validação do conteúdo. |
+| **Escolha** | CPU, CUDA ou DirectML é declarado; ausência não vira fallback oculto. |
+| **Observe** | Histórico, retenção e visão concorrente da frota reduzem trabalho manual. |
+| **Valide** | A suíte completa roda também em um runner Linux ARM64 nativo. |
 
-Para o caminho rápido, `mirai launch` leva um modelo validado até a primeira
-inferência em um comando. O desenho, schema e limites estão documentados em
-[Projeto Hikari v0.10](docs/hikari-v0.10.md).
+O desenho, os limites e o modelo de ameaças estão documentados em
+[Projeto Hikari v0.11](docs/hikari-v0.11.md). O fluxo de aceite que originou o
+Pilot permanece em [Projeto Hikari v0.10](docs/hikari-v0.10.md).
 
 ## Por que este projeto existe
 
@@ -87,7 +87,7 @@ inferência em um comando. O desenho, schema e limites estão documentados em
 
 ## Status atual
 
-| Capacidade | v0.10 |
+| Capacidade | v0.11 |
 | --- | --- |
 | Validação estrutural com `onnx.checker` | Pronto |
 | Pacote `.mirai` determinístico com manifesto estrito | Pronto |
@@ -104,10 +104,16 @@ inferência em um comando. O desenho, schema e limites estão documentados em
 | Piloto declarativo com critérios de aceite | Pronto |
 | Benchmark remoto e relatórios JSON/Markdown | Pronto |
 | Rollback automático após reprovação | Pronto |
-| Imagens em inferência remota | Ainda não |
-| Provider validado no CI | ONNX Runtime CPU |
+| Assinatura Ed25519/DSSE destacada | Pronto |
+| Histórico e retenção segura | Pronto |
+| RBAC, rate limit e rotação de identidade | Pronto |
+| PNG/JPEG/BMP/WebP/JSON/NPY em inferência remota | Pronto |
+| Visão de frota e descoberta mDNS opcional | Pronto; mDNS não autentica |
+| Perfis CPU/CUDA/DirectML | Seleção pronta; CPU validado |
+| ARM64 Linux / ONNX Runtime CPU | Job nativo no CI |
+| Plugins de runtime e RISC-V | Experimental, não validado |
 
-O projeto está em estágio **alpha**. A v0.10 foi desenhada para laboratório,
+O projeto está em estágio **alpha**. A v0.11 foi desenhada para laboratório,
 localhost e redes privadas controladas; ela ainda não é um gateway para
 exposição direta à internet.
 
@@ -119,20 +125,26 @@ flowchart TD
     PILOT["Mirai Pilot<br/>critérios + pipeline"]
     REG["Registro local protegido"]
     LINK["Hikari Link<br/>TLS + pinning + token"]
+    TRUST["Trust<br/>Ed25519 + DSSE + RBAC"]
     API["Mirai Agent API v1"]
     PKG["Mirai Package<br/>manifesto + ONNX + SHA-256"]
     LIFE["Lifecycle persistente"]
     ORT["ONNX Runtime"]
     REPORT["Evidências<br/>JSON + Markdown"]
-    EDGE["Linux · Docker · futuro ARM64"]
+    INPUT["Secure Inputs<br/>imagem + JSON + NPY"]
+    FLEET["Fleet<br/>inventário + retenção"]
+    EDGE["Linux x86-64 · ARM64 · Docker"]
 
     CLI --> PILOT
     PILOT --> REG
     CLI --> PKG
     PKG --> LINK
+    TRUST --> PKG
     PILOT --> LINK
     LINK --> API
+    INPUT --> API
     API --> LIFE
+    FLEET --> API
     LIFE --> ORT
     ORT --> EDGE
     PILOT --> REPORT
@@ -149,7 +161,9 @@ O Agent usa armazenamento simples e inspecionável:
 | `deployments.json` | Deployments, estados e seleção ativa. |
 | `events.jsonl` | Histórico de pareamentos, deploys, ativações e inferências. |
 
-O piloto está especificado em [Projeto Hikari v0.10](docs/hikari-v0.10.md), o
+Confiança, anexos e frota estão especificados em
+[Projeto Hikari v0.11](docs/hikari-v0.11.md), o piloto em
+[Projeto Hikari v0.10](docs/hikari-v0.10.md), o
 formato em [Projeto Hikari v0.9](docs/hikari-v0.9.md) e o
 modelo de confiança da rede em [Projeto Hikari v0.8](docs/hikari-v0.8.md).
 
@@ -235,6 +249,7 @@ benchmark remoto e critérios de aceite. No fim, ele grava:
 ```text
 .mirai/reports/
 ├── dummy-local-DATA-ID.json  # evidência estruturada para automação
+├── dummy-local-DATA-ID.json.sig # assinatura DSSE opcional
 └── dummy-local-DATA-ID.md    # relatório legível para a entrega
 ```
 
@@ -242,12 +257,23 @@ Se qualquer etapa ou critério falhar, o relatório registra o motivo e o
 deployment anterior é restaurado. Veja todos os campos, limites e garantias em
 [Projeto Hikari v0.10](docs/hikari-v0.10.md).
 
+Consulte ou aplique retenção sem scripts próprios:
+
+```bash
+mirai pilot history --limit 20
+mirai pilot prune --keep 20        # simulação
+mirai pilot prune --keep 20 --apply
+```
+
+Para assinatura automática, informe `report.signing_key` no projeto. A chave
+privada permanece apenas na máquina que executa o Pilot.
+
 ## Conecte um dispositivo na rede
 
 No dispositivo de destino, inicie o Agent em um endereço de rede:
 
 ```bash
-mirai agent start --host 0.0.0.0
+mirai agent start --host 0.0.0.0 --pairing-role operator
 ```
 
 Fora de localhost, o Agent ativa HTTPS e autenticação automaticamente. Ele
@@ -275,6 +301,12 @@ Para encerrar o acesso dessa CLI:
 mirai device revoke edge
 ```
 
+O papel é escolhido por código emitido: `viewer` consulta, `operator` opera
+modelos e `admin` também gerencia clientes. Para descoberta link-local
+opcional, instale `miraios[discovery]`, inicie com `--discoverable` e use
+`mirai device discover`; o candidato encontrado ainda precisa do mesmo
+pareamento com fingerprint.
+
 ## Comandos
 
 | Comando | Descrição |
@@ -287,13 +319,21 @@ mirai device revoke edge
 | `mirai launch ARQUIVO --device edge --input 5` | Faz o fluxo rápido até a inferência. |
 | `mirai pilot init` | Cria um projeto declarativo de piloto. |
 | `mirai pilot run [ARQUIVO]` | Executa critérios, relatório e rollback. |
+| `mirai pilot history/prune` | Consulta evidências e aplica retenção confirmada. |
+| `mirai key generate release` | Cria um par Ed25519 local. |
+| `mirai sign/verify ARQUIVO ...` | Assina ou verifica pacote/relatório com DSSE. |
 | `mirai agent start` | Inicia o Agent local. |
 | `mirai agent start --host 0.0.0.0` | Inicia um Agent HTTPS pareável. |
 | `mirai device add/list/info/remove` | Gerencia destinos locais. |
 | `mirai device pair edge ...` | Verifica e pareia um Agent HTTPS. |
 | `mirai device revoke edge` | Revoga o token e remove o cadastro. |
+| `mirai device clients/role edge ...` | Administra papéis dos clientes pareados. |
+| `mirai device discover` | Encontra candidatos mDNS sem confiar neles. |
 | `mirai doctor --device edge` | Diagnostica canal, versões e runtime. |
-| `mirai deploy ARQUIVO --device edge` | Envia um ONNX ou `.mirai`. |
+| `mirai deploy ARQUIVO --device edge --provider-profile cpu` | Envia com provider explícito. |
+| `mirai cleanup --device edge --keep 5` | Simula/aplica retenção de deployments. |
+| `mirai fleet status` | Consulta a frota em paralelo, preservando hosts offline. |
+| `mirai runtime list` | Lista ONNX e plugins experimentais descobertos. |
 | `mirai status --device edge` | Lista deployments e o modelo ativo. |
 | `mirai activate ID --device edge` | Ativa um deployment pronto. |
 | `mirai run --device edge --input 5` | Executa no deployment ativo. |
@@ -347,16 +387,20 @@ auxiliares ainda não fazem parte do contrato.
 
 ### No Agent
 
-A inferência remota aceita escalares, arrays JSON e entradas nomeadas:
+A inferência remota aceita escalares, arrays, entradas nomeadas e arquivos:
 
 ```bash
 mirai run --device edge --input 5
 mirai run --device edge --input x=5 --input y=7
+mirai run --device edge --input image=foto.png --layout nchw
+mirai run --device edge --input tensor.npy
+mirai run --device edge --input dados.json
 ```
 
-Caminhos de imagens continuam rejeitados no Agent porque a API remota não
-transfere arquivos de entrada. O contrato de imagem já é preservado no
-deployment para uma futura API binária segura.
+PNG, JPEG, BMP, WebP, JSON e NPY são enviados com tamanho e SHA-256, validados
+contra extensão, tipo e conteúdo real, materializados com nome gerado e
+eliminados depois da inferência. O limite é 8 MB por arquivo e 10 MB por
+requisição; NPY recusa pickle e objetos Python.
 
 ## Benchmark local
 
@@ -408,6 +452,9 @@ acesso pela rede:
 - o código de pareamento tem 12 caracteres, expira em dez minutos, fica apenas
   em memória e só pode ser usado uma vez;
 - cada cliente recebe um token aleatório próprio e revogável;
+- cada cliente recebe `viewer`, `operator` ou `admin`, e toda operação exige o
+  papel mínimo correspondente;
+- cinco falhas recentes de pareamento por origem acionam bloqueio temporário;
 - o Agent persiste somente o SHA-256 do token; o registro da CLI usa permissão
   `0600` em sistemas compatíveis;
 - somente `/v1/health` e `/v1/pair` são públicos no modo seguro;
@@ -415,16 +462,21 @@ acesso pela rede:
 - pacotes recusam arquivos extras, duplicados, links, compressão e manifesto
   fora do schema;
 - o hash interno protege o ONNX e o contrato declarado é comparado ao runtime;
+- Ed25519 e DSSE assinam digests tipados de pacotes e relatórios;
+- uploads remotos têm allowlist, hash, limites, validação de conteúdo e vida
+  somente temporária;
+- a identidade pode ser rotacionada offline, invalidando clientes e sem
+  arquivar a chave privada antiga;
 - um Pilot reprovado restaura a ativação anterior ou desativa o primeiro
   candidato;
 - relatórios não recebem token, código de pareamento ou chave privada e, por
   padrão, ocultam as entradas de inferência.
 
-Ainda não há papéis de autorização, rotação automática de certificados,
-limitação de tentativas, assinatura digital de pacotes ou integração com uma
-autoridade certificadora. Hash comprova integridade, não autoria. Use firewall,
-mantenha a porta em uma rede privada e não exponha o Agent diretamente à
-internet.
+Ainda não há autoridade certificadora, mTLS, rotação automática, malware
+scanning, transparência de assinaturas ou cofre de chaves. A assinatura prova
+posse da chave, mas a distribuição confiável da chave pública continua sendo
+responsabilidade do operador. Use firewall, mantenha a porta em uma rede
+privada e não exponha o Agent diretamente à internet.
 
 ## Roadmap
 
@@ -442,21 +494,17 @@ internet.
   contrato verificável, pré-processamento e deploy compatível.
 - [x] **v0.10 — Aceite:** launch unificado, projeto declarativo, health check,
   benchmark remoto, critérios, evidências e rollback automático.
+- [x] **v0.11 — Confiança e frota:** Ed25519/DSSE, RBAC, rotação, rate limit,
+  anexos seguros, retenção, frota, providers explícitos e CI ARM64.
 
 ### Próximo
 
-- [ ] Assinatura digital dos relatórios e pacotes `.mirai`.
-- [ ] Histórico consultável de pilotos e política de retenção de deployments.
-- [ ] Rotação de identidade, limitação de pareamento e papéis de acesso.
-- [ ] Upload seguro de imagens e outros arquivos de entrada.
-
-### Depois
-
-- [ ] Descoberta de dispositivos e visão de frota.
-- [ ] Seleção explícita de providers e perfis de hardware.
-- [ ] Compatibilidade validada em ARM64.
-- [ ] Providers CUDA e DirectML.
-- [ ] Suporte experimental a outros runtimes e RISC-V.
+- [ ] Trust store e políticas para exigir assinatura antes do deploy.
+- [ ] mTLS e rotação automatizada, com recuperação documentada.
+- [ ] Dashboard web local sobre a API de frota.
+- [ ] Testes físicos publicados para NVIDIA CUDA e Windows DirectML/WinML.
+- [ ] Assinatura e distribuição de plugins de runtime.
+- [ ] Compatibilidade RISC-V somente após runner e runtime reais.
 
 O roadmap prioriza um protocolo seguro e útil antes de ampliar a quantidade de
 hardwares suportados.
@@ -471,7 +519,8 @@ python -m compileall -q src tests scripts
 python -m pytest
 ```
 
-O CI executa os testes em Python 3.10, 3.11, 3.12 e 3.13. Consulte
+O CI executa 180 testes em Python 3.10, 3.11, 3.12 e 3.13 no Linux x86-64 e a
+suíte completa em Linux ARM64 nativo. Consulte
 [CONTRIBUTING.md](CONTRIBUTING.md) antes de enviar mudanças.
 
 Os ativos visuais do README são reproduzíveis:
@@ -493,7 +542,9 @@ Documentação dos marcos:
 - [v0.8 — Hikari Link](docs/hikari-v0.8.md)
 - [v0.9 — Mirai Package](docs/hikari-v0.9.md)
 - [v0.10 — Mirai Pilot](docs/hikari-v0.10.md)
+- [v0.11 — Trust, Fleet e Secure Inputs](docs/hikari-v0.11.md)
 - [Changelog completo](CHANGELOG.md)
+- [Política de segurança](SECURITY.md)
 
 ## Licença
 

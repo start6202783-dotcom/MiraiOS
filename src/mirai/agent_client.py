@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlencode, urlsplit
 
 from . import __version__
+from .attachments import encode_remote_inputs
 from .devices import (
     Device,
     add_device,
@@ -23,6 +24,7 @@ from .devices import (
 from .errors import MiraiRuntimeError
 from .inspect import validate_artifact
 from .package import MIRAI_EXTENSION, MIRAI_MEDIA_TYPE, calculate_sha256
+from .providers import normalize_provider_profile
 from .security import normalize_fingerprint
 
 
@@ -190,6 +192,7 @@ def pair_device(
         "fingerprint": pairing.get("fingerprint"),
         "agent_id": pairing.get("agent_id"),
         "client_id": pairing.get("client_id"),
+        "role": pairing.get("role"),
     }
     if not all(isinstance(value, str) and value for value in required.values()):
         raise MiraiRuntimeError(
@@ -213,6 +216,7 @@ def pair_device(
         tls_fingerprint=returned_fingerprint,
         agent_id=str(required["agent_id"]),
         client_id=str(required["client_id"]),
+        role=str(required["role"]),
     )
     return device, pairing
 
@@ -280,6 +284,31 @@ def get_deployment_status(device: Device) -> dict[str, Any]:
     return payload
 
 
+def get_agent_clients(device: Device) -> list[dict[str, Any]]:
+    """Lista identidades pareadas quando a credencial atual é admin."""
+    payload = request_json(device, "/v1/clients")
+    clients = payload.get("clients")
+    if not isinstance(clients, list):
+        raise MiraiRuntimeError(
+            f"Agent '{device.name}' retornou clientes inválidos"
+        )
+    return clients
+
+
+def set_agent_client_role(
+    device: Device,
+    client_id: str,
+    role: str,
+) -> dict[str, Any]:
+    """Altera um papel remoto usando uma credencial administrativa."""
+    return request_json(
+        device,
+        f"/v1/clients/{client_id}",
+        method="PATCH",
+        payload={"role": role},
+    )
+
+
 def activate_deployment(
     device: Device,
     deployment_id: str,
@@ -308,10 +337,13 @@ def run_remote_model(
     model_name: str | None = None,
 ) -> dict[str, Any]:
     """Executa uma inferência no deployment ativo do Agent."""
+    encoded_inputs, attachments = encode_remote_inputs(input_specs)
     payload: dict[str, Any] = {
-        "inputs": input_specs,
+        "inputs": encoded_inputs,
         "layout": layout,
     }
+    if attachments:
+        payload["attachments"] = attachments
     if model_name is not None:
         payload["model"] = model_name
     return request_json(
@@ -322,8 +354,13 @@ def run_remote_model(
     )
 
 
-def deploy_model(device: Device, artifact_path: Path) -> dict[str, Any]:
+def deploy_model(
+    device: Device,
+    artifact_path: Path,
+    provider_profile: str = "auto",
+) -> dict[str, Any]:
     """Valida e envia um ONNX ou pacote .mirai usando um corpo binário."""
+    provider_profile = normalize_provider_profile(provider_profile)
     validate_artifact(artifact_path)
     artifact_size = artifact_path.stat().st_size
     artifact_sha256 = calculate_sha256(artifact_path)
@@ -336,6 +373,7 @@ def deploy_model(device: Device, artifact_path: Path) -> dict[str, Any]:
         ),
         "Content-Length": str(artifact_size),
         "X-Mirai-SHA256": artifact_sha256,
+        "X-Mirai-Provider-Profile": provider_profile,
     }
     if is_package:
         headers["X-Mirai-Artifact-Name"] = artifact_path.name
@@ -361,3 +399,32 @@ def deploy_model(device: Device, artifact_path: Path) -> dict[str, Any]:
     finally:
         if connection is not None:
             connection.close()
+
+
+def delete_deployment(device: Device, deployment_id: str) -> dict[str, Any]:
+    """Remove um deployment inativo por identificador exato."""
+    return request_json(
+        device,
+        f"/v1/deployments/{deployment_id}",
+        method="DELETE",
+    )
+
+
+def deployment_retention_candidates(
+    status: dict[str, Any],
+    keep: int,
+) -> list[dict[str, Any]]:
+    """Seleciona deployments inativos antigos sem tocar no ativo."""
+    if keep < 0:
+        raise MiraiRuntimeError("keep não pode ser negativo")
+    deployments = status.get("deployments")
+    if not isinstance(deployments, list):
+        raise MiraiRuntimeError("resposta de deployments inválida")
+    active_id = status.get("active_deployment_id")
+    inactive = [
+        item
+        for item in deployments
+        if isinstance(item, dict) and item.get("deployment_id") != active_id
+    ]
+    inactive.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    return inactive[keep:]

@@ -7,6 +7,9 @@
     "5.0"
   ],
   "layout": "auto",
+  "runtime": {
+    "provider_profile": "auto"
+  },
   "benchmark": {
     "runs": 20,
     "warmup": 3
@@ -19,6 +22,7 @@
   },
   "report": {
     "directory": "../.mirai/reports",
-    "include_inputs": false
+    "include_inputs": false,
+    "signing_key": null
   }
 }

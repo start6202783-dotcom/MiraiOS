@@ -152,6 +152,10 @@ JSON pode ser processado por CI, painéis ou sistemas futuros.
 
 ## Limitações conhecidas
 
+> Esta seção registra o estado da v0.10. Uploads remotos, assinaturas e
+> retenção foram entregues posteriormente na
+> [especificação v0.11](hikari-v0.11.md).
+
 - o benchmark remoto mede a latência informada pelo ONNX Runtime no Agent; o
   tempo de rede não faz parte do P95 do modelo;
 - a inferência remota ainda não transfere imagens ou outros arquivos;

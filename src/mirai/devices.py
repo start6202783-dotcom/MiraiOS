@@ -12,13 +12,14 @@ from urllib.parse import urlsplit, urlunsplit
 
 from .errors import MiraiRuntimeError
 from .security import normalize_fingerprint
+from .security import ACCESS_ROLES
 
 
 DEVICE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,256}$")
 AGENT_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 CLIENT_ID_PATTERN = re.compile(r"^[0-9a-f]{16}$")
-DEVICE_REGISTRY_VERSION = 2
+DEVICE_REGISTRY_VERSION = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +32,7 @@ class Device:
     tls_fingerprint: str | None = None
     agent_id: str | None = None
     client_id: str | None = None
+    role: str | None = None
 
     @property
     def paired(self) -> bool:
@@ -104,12 +106,13 @@ def _normalize_optional_credentials(
     tls_fingerprint: str | None,
     agent_id: str | None,
     client_id: str | None,
+    role: str | None,
     allow_legacy_unpaired: bool = False,
-) -> tuple[str | None, str | None, str | None, str | None]:
+) -> tuple[str | None, str | None, str | None, str | None, str | None]:
     provided = (token, tls_fingerprint, agent_id, client_id)
     if not any(value is not None for value in provided):
         if allow_legacy_unpaired:
-            return None, None, None, None
+            return None, None, None, None, None
         if not is_loopback_agent_url(url):
             raise MiraiRuntimeError(
                 "Agents fora de localhost exigem pareamento; "
@@ -119,7 +122,7 @@ def _normalize_optional_credentials(
             raise MiraiRuntimeError(
                 "uma URL HTTPS exige fingerprint e credenciais de pareamento"
             )
-        return None, None, None, None
+        return None, None, None, None, None
 
     if not all(isinstance(value, str) and value for value in provided):
         raise MiraiRuntimeError(
@@ -140,7 +143,10 @@ def _normalize_optional_credentials(
         raise MiraiRuntimeError("identidade do Agent possui formato inválido")
     if not CLIENT_ID_PATTERN.fullmatch(client_id):
         raise MiraiRuntimeError("identidade do cliente possui formato inválido")
-    return token, normalized_fingerprint, agent_id, client_id
+    normalized_role = role or "admin"
+    if normalized_role not in ACCESS_ROLES:
+        raise MiraiRuntimeError("papel do cliente possui formato inválido")
+    return token, normalized_fingerprint, agent_id, client_id, normalized_role
 
 
 def load_devices(path: Path | None = None) -> dict[str, Device]:
@@ -158,7 +164,7 @@ def load_devices(path: Path | None = None) -> dict[str, Device]:
 
     if (
         not isinstance(raw_data, dict)
-        or raw_data.get("version") not in {1, DEVICE_REGISTRY_VERSION}
+        or raw_data.get("version") not in {1, 2, DEVICE_REGISTRY_VERSION}
     ):
         raise MiraiRuntimeError("registro de dispositivos possui formato incompatível")
 
@@ -172,13 +178,14 @@ def load_devices(path: Path | None = None) -> dict[str, Device]:
         for item in raw_devices:
             name = normalize_device_name(item["name"])
             url = normalize_agent_url(item["url"])
-            token, fingerprint, agent_id, client_id = (
+            token, fingerprint, agent_id, client_id, role = (
                 _normalize_optional_credentials(
                     url=url,
                     token=item.get("token"),
                     tls_fingerprint=item.get("tls_fingerprint"),
                     agent_id=item.get("agent_id"),
                     client_id=item.get("client_id"),
+                    role=item.get("role"),
                     allow_legacy_unpaired=legacy_registry,
                 )
             )
@@ -189,6 +196,7 @@ def load_devices(path: Path | None = None) -> dict[str, Device]:
                 tls_fingerprint=fingerprint,
                 agent_id=agent_id,
                 client_id=client_id,
+                role=role,
             )
     except (KeyError, TypeError, MiraiRuntimeError) as error:
         raise MiraiRuntimeError("registro de dispositivos está corrompido") from error
@@ -242,6 +250,7 @@ def add_device(
     tls_fingerprint: str | None = None,
     agent_id: str | None = None,
     client_id: str | None = None,
+    role: str | None = None,
 ) -> Device:
     """Adiciona um Agent ao registro local."""
     normalized_name = normalize_device_name(name)
@@ -251,12 +260,14 @@ def add_device(
         normalized_fingerprint,
         normalized_agent_id,
         normalized_client_id,
+        normalized_role,
     ) = _normalize_optional_credentials(
         url=normalized_url,
         token=token,
         tls_fingerprint=tls_fingerprint,
         agent_id=agent_id,
         client_id=client_id,
+        role=role,
     )
     device = Device(
         name=normalized_name,
@@ -265,6 +276,7 @@ def add_device(
         tls_fingerprint=normalized_fingerprint,
         agent_id=normalized_agent_id,
         client_id=normalized_client_id,
+        role=normalized_role,
     )
     devices = load_devices(path)
     if normalized_name in devices and not replace:

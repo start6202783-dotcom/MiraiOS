@@ -26,6 +26,8 @@ from .devices import Device, get_device
 from .errors import MiraiRuntimeError
 from .inspect import validate_artifact
 from .package import MIRAI_EXTENSION, calculate_sha256, load_mirai_package
+from .providers import normalize_provider_profile
+from .signing import sign_artifact
 
 
 PILOT_SCHEMA_VERSION = 1
@@ -62,6 +64,8 @@ class PilotConfig:
     acceptance: PilotAcceptance
     report_directory: Path
     include_inputs_in_report: bool
+    provider_profile: str = "auto"
+    signing_key_path: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +85,7 @@ class PilotOutcome:
     success: bool
     report_json: Path
     report_markdown: Path
+    report_signature: Path | None
     report: dict[str, Any]
 
 
@@ -218,6 +223,7 @@ def load_pilot_config(path: Path = DEFAULT_PILOT_CONFIG) -> PilotConfig:
             "benchmark",
             "acceptance",
             "report",
+            "runtime",
         },
         "projeto",
     )
@@ -255,6 +261,13 @@ def load_pilot_config(path: Path = DEFAULT_PILOT_CONFIG) -> PilotConfig:
     layout = payload.get("layout", "auto")
     if layout not in {"auto", "nchw", "nhwc"}:
         raise MiraiRuntimeError("'layout' deve ser auto, nchw ou nhwc")
+
+    runtime_payload = _require_object(payload.get("runtime", {}), "runtime")
+    _reject_unknown(runtime_payload, {"provider_profile"}, "runtime")
+    raw_provider_profile = runtime_payload.get("provider_profile", "auto")
+    if not isinstance(raw_provider_profile, str):
+        raise MiraiRuntimeError("'runtime.provider_profile' deve ser uma string")
+    provider_profile = normalize_provider_profile(raw_provider_profile)
 
     benchmark = _require_object(payload.get("benchmark", {}), "benchmark")
     _reject_unknown(benchmark, {"runs", "warmup"}, "benchmark")
@@ -316,7 +329,7 @@ def load_pilot_config(path: Path = DEFAULT_PILOT_CONFIG) -> PilotConfig:
     report_payload = _require_object(payload.get("report", {}), "report")
     _reject_unknown(
         report_payload,
-        {"directory", "include_inputs"},
+        {"directory", "include_inputs", "signing_key"},
         "report",
     )
     include_inputs = report_payload.get("include_inputs", False)
@@ -326,6 +339,16 @@ def load_pilot_config(path: Path = DEFAULT_PILOT_CONFIG) -> PilotConfig:
         source_path.parent,
         report_payload.get("directory", str(DEFAULT_REPORT_DIRECTORY)),
         "report.directory",
+    )
+    raw_signing_key = report_payload.get("signing_key")
+    signing_key_path = (
+        _resolve_relative(
+            source_path.parent,
+            raw_signing_key,
+            "report.signing_key",
+        )
+        if raw_signing_key is not None
+        else None
     )
     artifact_path = _resolve_relative(
         source_path.parent,
@@ -344,6 +367,8 @@ def load_pilot_config(path: Path = DEFAULT_PILOT_CONFIG) -> PilotConfig:
         acceptance=acceptance,
         report_directory=report_directory,
         include_inputs_in_report=include_inputs,
+        provider_profile=provider_profile,
+        signing_key_path=signing_key_path,
     )
 
 
@@ -365,6 +390,7 @@ def write_pilot_template(
         "device": "local",
         "inputs": ["5.0"],
         "layout": "auto",
+        "runtime": {"provider_profile": "auto"},
         "benchmark": {
             "runs": 20,
             "warmup": 3,
@@ -378,6 +404,7 @@ def write_pilot_template(
         "report": {
             "directory": ".mirai/reports",
             "include_inputs": False,
+            "signing_key": None,
         },
     }
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -453,13 +480,14 @@ def launch_artifact(
     *,
     run_inference: bool = True,
     rollback_on_failure: bool = True,
+    provider_profile: str = "auto",
 ) -> LaunchResult:
     """Executa o fluxo rápido com rollback quando a validação final falha."""
     validate_artifact(artifact_path)
     device = get_device(device_name)
     doctor = _require_compatible_doctor(device)
     previous_active = doctor["deployments"].get("active_deployment_id")
-    deployment = deploy_model(device, artifact_path)
+    deployment = deploy_model(device, artifact_path, provider_profile)
     deployed_id = str(deployment["deployment_id"])
     activate_deployment(device, deployed_id)
     inference: dict[str, Any] | None = None
@@ -897,7 +925,11 @@ def run_pilot(config: PilotConfig) -> PilotOutcome:
         deployment = _stage(
             stages,
             "deploy",
-            lambda: deploy_model(device, config.artifact_path),
+            lambda: deploy_model(
+                device,
+                config.artifact_path,
+                config.provider_profile,
+            ),
             lambda value: {
                 "deployment_id": value["deployment_id"],
                 "status": value["status"],
@@ -911,6 +943,7 @@ def run_pilot(config: PilotConfig) -> PilotOutcome:
             "model": deployment.get("model"),
             "sha256": deployment.get("sha256"),
             "providers": deployment.get("providers") or [],
+            "provider_profile": deployment.get("provider_profile"),
             "package": deployment.get("package"),
         }
         _stage(
@@ -1012,9 +1045,18 @@ def run_pilot(config: PilotConfig) -> PilotOutcome:
         safe_report,
         config.report_directory,
     )
+    signature_path: Path | None = None
+    if config.signing_key_path is not None:
+        signed = sign_artifact(
+            json_path,
+            config.signing_key_path,
+            replace=True,
+        )
+        signature_path = Path(signed["signature"])
     return PilotOutcome(
         success=safe_report["status"] == "passed",
         report_json=json_path,
         report_markdown=markdown_path,
+        report_signature=signature_path,
         report=safe_report,
     )

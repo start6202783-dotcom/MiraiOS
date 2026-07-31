@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -13,12 +14,16 @@ from .agent_client import (
     activate_deployment,
     deploy_model,
     doctor_device,
+    delete_deployment,
+    deployment_retention_candidates,
+    get_agent_clients,
     get_agent_info,
     get_agent_logs,
     get_deployment_status,
     pair_device,
     revoke_remote_device,
     run_remote_model,
+    set_agent_client_role,
 )
 from .benchmark import (
     DEFAULT_BENCHMARK_RUNS,
@@ -26,21 +31,38 @@ from .benchmark import (
     benchmark_model,
 )
 from .devices import add_device, get_device, load_devices, remove_device
+from .devices import mirai_home
+from .discovery import discover_agents
 from .errors import MiraiRuntimeError
 from .inspect import show_artifact_info, validate_artifact
+from .fleet import inspect_fleet
+from .history import (
+    get_pilot_report,
+    list_pilot_history,
+    prune_pilot_history,
+)
 from .package import (
     MIRAI_EXTENSION,
     create_mirai_package,
     validate_package_metadata,
 )
 from .pilot import (
+    DEFAULT_REPORT_DIRECTORY,
     DEFAULT_PILOT_CONFIG,
     launch_artifact,
     load_pilot_config,
     run_pilot,
     write_pilot_template,
 )
+from .providers import PROVIDER_PROFILES, list_runtime_backends
 from .runtime import run_model
+from .security import ACCESS_ROLES, rotate_agent_identity
+from .signing import (
+    generate_signing_key,
+    sign_artifact,
+    signing_key_paths,
+    verify_artifact,
+)
 
 
 VERSION = f"MiraiOS CLI v{__version__} (Projeto Hikari)"
@@ -180,6 +202,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="substitui o arquivo de saída quando ele já existe",
     )
 
+    key_parser = subparsers.add_parser(
+        "key",
+        help="gerencia chaves Ed25519 para assinaturas",
+    )
+    key_subparsers = key_parser.add_subparsers(
+        dest="key_command",
+        metavar="AÇÃO",
+        required=True,
+    )
+    key_generate_parser = key_subparsers.add_parser(
+        "generate",
+        help="gera um par de chaves Ed25519 local",
+    )
+    key_generate_parser.add_argument("name", metavar="NOME")
+    key_generate_parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="substitui um par existente",
+    )
+
+    sign_parser = subparsers.add_parser(
+        "sign",
+        help="assina um pacote .mirai ou relatório JSON com DSSE/Ed25519",
+    )
+    sign_parser.add_argument("artifact_path", type=Path, metavar="ARTEFATO")
+    sign_parser.add_argument("--key", required=True, type=Path, metavar="CHAVE_PRIVADA")
+    sign_parser.add_argument("--output", type=Path, metavar="ASSINATURA")
+    sign_parser.add_argument("--replace", action="store_true")
+
+    verify_parser = subparsers.add_parser(
+        "verify",
+        help="verifica assinatura, chave e digest do artefato",
+    )
+    verify_parser.add_argument("artifact_path", type=Path, metavar="ARTEFATO")
+    verify_parser.add_argument("--signature", required=True, type=Path)
+    verify_parser.add_argument("--key", required=True, type=Path, metavar="CHAVE_PÚBLICA")
+
     validate_parser = subparsers.add_parser(
         "validate",
         help="valida integralmente um modelo ONNX ou pacote .mirai",
@@ -245,6 +304,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="dispositivo cadastrado com 'mirai device add'",
     )
     launch_parser.add_argument(
+        "--provider-profile",
+        choices=tuple(PROVIDER_PROFILES),
+        default="auto",
+        help="provider: auto, cpu, cuda ou directml",
+    )
+    launch_parser.add_argument(
         "--no-run",
         action="store_true",
         help="encerra após ativar, sem executar a inferência de saúde",
@@ -288,6 +353,34 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_PILOT_CONFIG,
         metavar="ARQUIVO",
     )
+    pilot_history_parser = pilot_subparsers.add_parser(
+        "history",
+        help="consulta execuções anteriores",
+    )
+    pilot_history_parser.add_argument(
+        "--directory",
+        type=Path,
+        default=DEFAULT_REPORT_DIRECTORY,
+    )
+    pilot_history_parser.add_argument("--limit", type=positive_int, default=20)
+    pilot_history_parser.add_argument("--status", choices=("passed", "failed"))
+    pilot_show_parser = pilot_subparsers.add_parser(
+        "show",
+        help="mostra o JSON de um piloto pelo run_id",
+    )
+    pilot_show_parser.add_argument("run_id")
+    pilot_show_parser.add_argument(
+        "--directory",
+        type=Path,
+        default=DEFAULT_REPORT_DIRECTORY,
+    )
+    pilot_prune_parser = pilot_subparsers.add_parser(
+        "prune",
+        help="aplica retenção aos relatórios; padrão é simulação",
+    )
+    pilot_prune_parser.add_argument("--directory", type=Path, default=DEFAULT_REPORT_DIRECTORY)
+    pilot_prune_parser.add_argument("--keep", type=non_negative_int, required=True)
+    pilot_prune_parser.add_argument("--apply", action="store_true")
 
     device_parser = subparsers.add_parser(
         "device",
@@ -369,6 +462,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     device_revoke_parser.add_argument("name", metavar="NOME")
 
+    device_clients_parser = device_subparsers.add_parser(
+        "clients",
+        help="lista clientes pareados (requer admin)",
+    )
+    device_clients_parser.add_argument("name", metavar="NOME")
+    device_role_parser = device_subparsers.add_parser(
+        "role",
+        help="altera o papel de um cliente (requer admin)",
+    )
+    device_role_parser.add_argument("name", metavar="NOME")
+    device_role_parser.add_argument("client_id", metavar="CLIENTE")
+    device_role_parser.add_argument("role", choices=ACCESS_ROLES)
+    device_discover_parser = device_subparsers.add_parser(
+        "discover",
+        help="encontra candidatos mDNS sem confiar ou cadastrá-los",
+    )
+    device_discover_parser.add_argument("--timeout", type=float, default=2.0)
+
     deploy_parser = subparsers.add_parser(
         "deploy",
         help="valida e envia um ONNX ou pacote .mirai",
@@ -381,6 +492,31 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="NOME",
         help="dispositivo cadastrado com 'mirai device add'",
     )
+    deploy_parser.add_argument(
+        "--provider-profile",
+        choices=tuple(PROVIDER_PROFILES),
+        default="auto",
+    )
+
+    cleanup_parser = subparsers.add_parser(
+        "cleanup",
+        help="aplica retenção a deployments inativos; padrão é simulação",
+    )
+    cleanup_parser.add_argument("--device", required=True, dest="device_name")
+    cleanup_parser.add_argument("--keep", type=non_negative_int, required=True)
+    cleanup_parser.add_argument("--apply", action="store_true")
+
+    fleet_parser = subparsers.add_parser("fleet", help="consulta toda a frota cadastrada")
+    fleet_subparsers = fleet_parser.add_subparsers(
+        dest="fleet_command", metavar="AÇÃO", required=True
+    )
+    fleet_subparsers.add_parser("status", help="mostra saúde, hardware e deployment ativo")
+
+    runtime_parser = subparsers.add_parser("runtime", help="inspeciona backends de runtime")
+    runtime_subparsers = runtime_parser.add_subparsers(
+        dest="runtime_command", metavar="AÇÃO", required=True
+    )
+    runtime_subparsers.add_parser("list", help="lista backend interno e plugins experimentais")
 
     activate_parser = subparsers.add_parser(
         "activate",
@@ -471,6 +607,23 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="ativa HTTPS e pareamento mesmo em localhost",
     )
+    agent_start_parser.add_argument(
+        "--pairing-role",
+        choices=ACCESS_ROLES,
+        default="admin",
+        help="papel concedido pelo código de pareamento atual",
+    )
+    agent_start_parser.add_argument(
+        "--discoverable",
+        action="store_true",
+        help="anuncia o Agent via mDNS (não substitui o pareamento)",
+    )
+    agent_rotate_parser = agent_subparsers.add_parser(
+        "rotate-identity",
+        help="troca certificado e invalida todos os clientes pareados",
+    )
+    agent_rotate_parser.add_argument("--data-dir", type=Path, default=Path(".mirai-agent"))
+    agent_rotate_parser.add_argument("--confirm", required=True, metavar="AGENT_ID_ATUAL")
     return parser
 
 
@@ -522,6 +675,41 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{package.model_name} "
                 f"({package.manifest['model']['sha256']})"
             )
+            return 0
+
+        if args.command == "key" and args.key_command == "generate":
+            private_path, public_path = signing_key_paths(mirai_home(), args.name)
+            generated = generate_signing_key(
+                private_path,
+                public_path,
+                replace=args.replace,
+            )
+            print(f"[MiraiOS] Chave privada: {generated['private_key']}")
+            print(f"[MiraiOS] Chave pública: {generated['public_key']}")
+            print(f"[MiraiOS] Key ID: {generated['key_id']}")
+            return 0
+
+        if args.command == "sign":
+            signed = sign_artifact(
+                args.artifact_path,
+                args.key,
+                args.output,
+                replace=args.replace,
+            )
+            print(f"[MiraiOS] Assinatura DSSE: {signed['signature']}")
+            print(f"[MiraiOS] Key ID: {signed['key_id']}")
+            print(f"[MiraiOS] SHA-256: {signed['payload']['sha256']}")
+            return 0
+
+        if args.command == "verify":
+            verified = verify_artifact(
+                args.artifact_path,
+                args.signature,
+                args.key,
+            )
+            print("[MiraiOS] Assinatura válida.")
+            print(f"[MiraiOS] Key ID: {verified['key_id']}")
+            print(f"[MiraiOS] SHA-256: {verified['payload']['sha256']}")
             return 0
 
         if args.command == "validate":
@@ -620,6 +808,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.input_specs,
                 args.layout,
                 run_inference=not args.no_run,
+                provider_profile=args.provider_profile,
             )
             print(
                 "[MiraiOS] Deployment ativo: "
@@ -650,11 +839,50 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 return 0
 
+            if args.pilot_command == "history":
+                entries = list_pilot_history(
+                    args.directory,
+                    limit=args.limit,
+                    status=args.status,
+                )
+                if not entries:
+                    print("[MiraiOS] Nenhum piloto encontrado.")
+                    return 0
+                print("[MiraiOS] Histórico de pilotos:")
+                for entry in entries:
+                    signed = "assinado" if Path(entry["signature"]).is_file() else "sem assinatura"
+                    print(
+                        f"- {entry['run_id']} | {entry['project']} | "
+                        f"{entry['status']} | {entry.get('device') or '-'} | {signed}"
+                    )
+                return 0
+
+            if args.pilot_command == "show":
+                report = get_pilot_report(args.directory, args.run_id)
+                print(json.dumps(report, indent=2, ensure_ascii=False))
+                return 0
+
+            if args.pilot_command == "prune":
+                candidates = prune_pilot_history(
+                    args.directory,
+                    keep=args.keep,
+                    apply=args.apply,
+                )
+                action = "Removidos" if args.apply else "Seriam removidos"
+                print(f"[MiraiOS] {action}: {len(candidates)} arquivo(s).")
+                for candidate in candidates:
+                    print(f"- {candidate}")
+                if not args.apply and candidates:
+                    print("[MiraiOS] Revise e repita com --apply para confirmar.")
+                return 0
+
             config = load_pilot_config(args.config_path)
             print(f"[MiraiOS] Pilot: iniciando {config.name}...")
             outcome = run_pilot(config)
             print(f"[MiraiOS] Evidência JSON: {outcome.report_json}")
             print(f"[MiraiOS] Relatório Markdown: {outcome.report_markdown}")
+            if outcome.report_signature is not None:
+                print(f"[MiraiOS] Assinatura DSSE: {outcome.report_signature}")
             if outcome.success:
                 print("[MiraiOS] Piloto aprovado.")
                 return 0
@@ -739,13 +967,56 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 return 0
 
+            if args.device_command == "clients":
+                device = get_device(args.name)
+                clients = get_agent_clients(device)
+                if not clients:
+                    print("[MiraiOS] Nenhum cliente pareado.")
+                    return 0
+                print(f"[MiraiOS] Clientes de {device.name}:")
+                for client in clients:
+                    print(
+                        f"- {client['client_id']} | {client['name']} | "
+                        f"{client.get('role', 'viewer')} | {client.get('last_seen_at')}"
+                    )
+                return 0
+
+            if args.device_command == "role":
+                device = get_device(args.name)
+                client = set_agent_client_role(
+                    device,
+                    args.client_id,
+                    args.role,
+                )
+                print(
+                    f"[MiraiOS] Papel atualizado: {client['client_id']} → {client['role']}"
+                )
+                return 0
+
+            if args.device_command == "discover":
+                candidates = discover_agents(args.timeout)
+                if not candidates:
+                    print("[MiraiOS] Nenhum candidato mDNS encontrado.")
+                    return 0
+                print("[MiraiOS] Candidatos não confiáveis (pareamento obrigatório):")
+                for candidate in candidates:
+                    print(
+                        f"- {candidate.name}: {candidate.url} | "
+                        f"Agent ID {candidate.agent_id or 'não informado'}"
+                    )
+                return 0
+
         if args.command == "deploy":
             device = get_device(args.device_name)
             print(
                 f"[MiraiOS] Enviando {args.artifact_path.name} "
                 f"para {device.name}..."
             )
-            deployment = deploy_model(device, args.artifact_path)
+            deployment = deploy_model(
+                device,
+                args.artifact_path,
+                args.provider_profile,
+            )
             print(
                 "[MiraiOS] Deployment pronto: "
                 f"{deployment['deployment_id']}"
@@ -760,6 +1031,50 @@ def main(argv: Sequence[str] | None = None) -> int:
             providers = deployment.get("providers") or []
             if providers:
                 print(f"[MiraiOS] Providers: {', '.join(providers)}")
+            return 0
+
+        if args.command == "cleanup":
+            device = get_device(args.device_name)
+            status = get_deployment_status(device)
+            candidates = deployment_retention_candidates(status, args.keep)
+            action = "Removendo" if args.apply else "Simulação"
+            print(f"[MiraiOS] {action}: {len(candidates)} deployment(s).")
+            for deployment in candidates:
+                print(
+                    f"- {deployment['deployment_id']} | {deployment.get('model')} | "
+                    f"{deployment.get('created_at')}"
+                )
+                if args.apply:
+                    delete_deployment(device, str(deployment["deployment_id"]))
+            if candidates and not args.apply:
+                print("[MiraiOS] Revise e repita com --apply para confirmar.")
+            return 0
+
+        if args.command == "fleet" and args.fleet_command == "status":
+            results = inspect_fleet(load_devices())
+            if not results:
+                print("[MiraiOS] Nenhum dispositivo cadastrado.")
+                return 0
+            print("[MiraiOS] Visão da frota:")
+            for item in results:
+                if item["status"] == "offline":
+                    print(f"○ {item['name']} | offline | {item['error']}")
+                    continue
+                hardware = item.get("hardware_profile") or {}
+                profile = hardware.get("profile", "desconhecido")
+                print(
+                    f"● {item['name']} | {profile} | "
+                    f"{item.get('active_deployment_id') or 'sem deployment'} | "
+                    f"{item['deployment_count']} total"
+                )
+            return 0
+
+        if args.command == "runtime" and args.runtime_command == "list":
+            print("[MiraiOS] Backends de runtime:")
+            for backend in list_runtime_backends():
+                print(
+                    f"- {backend['name']} | {backend['status']} | {backend['source']}"
+                )
             return 0
 
         if args.command == "activate":
@@ -867,7 +1182,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.port,
                 args.data_dir,
                 force_secure=args.secure,
+                pairing_role=args.pairing_role,
+                discoverable=args.discoverable,
             )
+            return 0
+
+        if args.command == "agent" and args.agent_command == "rotate-identity":
+            identity = rotate_agent_identity(args.data_dir, args.confirm)
+            print(f"[MiraiOS] Nova identidade: {identity.agent_id}")
+            print(f"[MiraiOS] Novo fingerprint: {identity.fingerprint}")
+            print("[MiraiOS] Todos os clientes antigos foram invalidados.")
             return 0
     except MiraiRuntimeError as error:
         return print_error(str(error))
