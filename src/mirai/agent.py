@@ -259,6 +259,26 @@ class AgentState:
             self._save_registry_unlocked(registry)
             return _public_deployment(target)
 
+    def deactivate_deployment(self) -> dict[str, Any] | None:
+        """Remove a seleção ativa e devolve o deployment anterior a ready."""
+        with self._deployments_lock:
+            registry = self._load_registry_unlocked()
+            active_id = registry.get("active_deployment_id")
+            if not active_id:
+                return None
+
+            now = _utc_now()
+            previous: dict[str, Any] | None = None
+            for item in registry["deployments"]:
+                if item.get("deployment_id") == active_id:
+                    item["status"] = "ready"
+                    item["updated_at"] = now
+                    previous = item
+                    break
+            registry["active_deployment_id"] = None
+            self._save_registry_unlocked(registry)
+            return _public_deployment(previous) if previous is not None else None
+
     def active_deployment(
         self,
         expected_model: str | None = None,
@@ -501,6 +521,9 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
                 status = HTTPStatus.CREATED
             elif request_path == "/v1/inferences":
                 payload = receive_inference(self, self.server.state)
+                status = HTTPStatus.OK
+            elif request_path == "/v1/deployments/deactivate":
+                payload = deactivate_deployment(self.server.state)
                 status = HTTPStatus.OK
             else:
                 activate_match = re.fullmatch(
@@ -905,6 +928,29 @@ def activate_deployment(
     deployment = state.activate_deployment(deployment_id)
     state.append_event({"type": "activation", **deployment})
     return deployment
+
+
+def deactivate_deployment(state: AgentState) -> dict[str, Any]:
+    """Desativa o deployment atual para concluir um rollback sem antecessor."""
+    deployment = state.deactivate_deployment()
+    event: dict[str, Any] = {
+        "type": "deactivation",
+        "status": "success",
+    }
+    if deployment is not None:
+        event.update(
+            {
+                "deployment_id": deployment["deployment_id"],
+                "model": deployment["model"],
+            }
+        )
+    state.append_event(event)
+    return {
+        **event,
+        "previous_deployment_id": (
+            deployment["deployment_id"] if deployment is not None else None
+        ),
+    }
 
 
 def receive_inference(

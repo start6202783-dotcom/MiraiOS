@@ -1,7 +1,7 @@
 include CHANGELOG.md
 include CONTRIBUTING.md
 include compose.yaml
-recursive-include examples *.onnx
+recursive-include examples *.json *.onnx
 recursive-include docs *.gif *.md *.png
 recursive-include docker *
 recursive-include scripts *.py

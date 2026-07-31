@@ -33,6 +33,13 @@ from .package import (
     create_mirai_package,
     validate_package_metadata,
 )
+from .pilot import (
+    DEFAULT_PILOT_CONFIG,
+    launch_artifact,
+    load_pilot_config,
+    run_pilot,
+    write_pilot_template,
+)
 from .runtime import run_model
 
 
@@ -224,6 +231,63 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"inferências de aquecimento (padrão: {DEFAULT_WARMUP_RUNS})",
     )
     _add_input_arguments(benchmark_parser)
+
+    launch_parser = subparsers.add_parser(
+        "launch",
+        help="valida, implanta, ativa e testa um modelo no dispositivo",
+    )
+    launch_parser.add_argument("artifact_path", type=Path, metavar="ARQUIVO")
+    launch_parser.add_argument(
+        "--device",
+        required=True,
+        dest="device_name",
+        metavar="NOME",
+        help="dispositivo cadastrado com 'mirai device add'",
+    )
+    launch_parser.add_argument(
+        "--no-run",
+        action="store_true",
+        help="encerra após ativar, sem executar a inferência de saúde",
+    )
+    _add_input_arguments(launch_parser)
+
+    pilot_parser = subparsers.add_parser(
+        "pilot",
+        help="executa pilotos com critérios, benchmark, relatório e rollback",
+    )
+    pilot_subparsers = pilot_parser.add_subparsers(
+        dest="pilot_command",
+        title="ações de piloto",
+        metavar="AÇÃO",
+        required=True,
+    )
+    pilot_init_parser = pilot_subparsers.add_parser(
+        "init",
+        help="cria um arquivo declarativo mirai-pilot.json",
+    )
+    pilot_init_parser.add_argument(
+        "config_path",
+        type=Path,
+        nargs="?",
+        default=DEFAULT_PILOT_CONFIG,
+        metavar="ARQUIVO",
+    )
+    pilot_init_parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="substitui uma configuração existente",
+    )
+    pilot_run_parser = pilot_subparsers.add_parser(
+        "run",
+        help="executa o projeto e gera evidências JSON e Markdown",
+    )
+    pilot_run_parser.add_argument(
+        "config_path",
+        type=Path,
+        nargs="?",
+        default=DEFAULT_PILOT_CONFIG,
+        metavar="ARQUIVO",
+    )
 
     device_parser = subparsers.add_parser(
         "device",
@@ -544,6 +608,59 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{stats.inferences_per_second:.2f}"
             )
             return 0
+
+        if args.command == "launch":
+            print(
+                f"[MiraiOS] Launch: {args.artifact_path.name} → "
+                f"{args.device_name}"
+            )
+            result = launch_artifact(
+                args.artifact_path,
+                args.device_name,
+                args.input_specs,
+                args.layout,
+                run_inference=not args.no_run,
+            )
+            print(
+                "[MiraiOS] Deployment ativo: "
+                f"{result.deployment['deployment_id']}"
+            )
+            if result.inference is not None:
+                print(
+                    "[MiraiOS] Resultado da inferência: "
+                    f"{result.inference['result']}"
+                )
+                print(
+                    "[MiraiOS] Latência remota: "
+                    f"{result.inference['latency_ms']:.2f} ms"
+                )
+            print("[MiraiOS] Launch concluído com sucesso.")
+            return 0
+
+        if args.command == "pilot":
+            if args.pilot_command == "init":
+                target = write_pilot_template(
+                    args.config_path,
+                    replace=args.replace,
+                )
+                print(f"[MiraiOS] Projeto de piloto criado: {target}")
+                print(
+                    "[MiraiOS] Próximo passo: edite o arquivo e execute "
+                    f"'mirai pilot run {target.name}'."
+                )
+                return 0
+
+            config = load_pilot_config(args.config_path)
+            print(f"[MiraiOS] Pilot: iniciando {config.name}...")
+            outcome = run_pilot(config)
+            print(f"[MiraiOS] Evidência JSON: {outcome.report_json}")
+            print(f"[MiraiOS] Relatório Markdown: {outcome.report_markdown}")
+            if outcome.success:
+                print("[MiraiOS] Piloto aprovado.")
+                return 0
+            return print_error(
+                "piloto reprovado; consulte o relatório e o rollback"
+            )
 
         if args.command == "device":
             if args.device_command == "add":
