@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import os
 import re
-import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .errors import MiraiRuntimeError
-
+from .json_codec import canonical_json_bytes, strict_json_dumps, strict_json_loads
+from .storage import atomic_write_bytes, stable_file_digest
 
 DSSE_PAYLOAD_TYPE = "application/vnd.mirai.artifact-digest.v1+json"
 SIGNATURE_SUFFIX = ".sig"
@@ -36,21 +35,7 @@ def _crypto() -> tuple[Any, Any, Any]:
 
 
 def _write_atomic(path: Path, content: bytes, mode: int) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(
-        f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
-    )
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
-    try:
-        with os.fdopen(descriptor, "wb") as output:
-            output.write(content)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, path)
-        os.chmod(path, mode)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
+    atomic_write_bytes(path, content, mode)
 
 
 def signing_key_paths(home: Path, name: str) -> tuple[Path, Path]:
@@ -166,7 +151,11 @@ def _pae(payload_type: str, payload: bytes) -> bytes:
     )
 
 
-def _artifact_payload(path: Path) -> dict[str, Any]:
+def _artifact_payload(
+    path: Path,
+    *,
+    artifact_name: str | None = None,
+) -> dict[str, Any]:
     target = path.expanduser().resolve()
     if not target.is_file():
         raise MiraiRuntimeError(f"artefato não encontrado: {target}")
@@ -174,20 +163,14 @@ def _artifact_payload(path: Path) -> dict[str, Any]:
         raise MiraiRuntimeError(
             "somente pacotes .mirai e relatórios JSON podem ser assinados"
         )
-    digest = hashlib.sha256()
-    try:
-        with target.open("rb") as source:
-            for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                digest.update(chunk)
-    except OSError as error:
-        raise MiraiRuntimeError(f"não foi possível ler o artefato: {error}") from error
+    digest, size_bytes = stable_file_digest(target)
     kind = "mirai-package" if target.suffix.lower() == ".mirai" else "pilot-report"
     return {
         "version": 1,
         "kind": kind,
-        "name": target.name,
-        "sha256": digest.hexdigest(),
-        "size_bytes": target.stat().st_size,
+        "name": artifact_name or target.name,
+        "sha256": digest,
+        "size_bytes": size_bytes,
         "signed_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -214,13 +197,7 @@ def sign_artifact(
         raise MiraiRuntimeError("a assinatura não pode substituir o próprio artefato")
     private_key = _load_private_key(private_key_path)
     payload_data = _artifact_payload(target)
-    payload = json.dumps(
-        payload_data,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
+    payload = canonical_json_bytes(payload_data)
     signature = private_key.sign(_pae(DSSE_PAYLOAD_TYPE, payload))
     key_id = hashlib.sha256(_raw_public(private_key.public_key())).hexdigest()
     envelope = {
@@ -234,7 +211,7 @@ def sign_artifact(
         ],
     }
     encoded = (
-        json.dumps(envelope, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+        strict_json_dumps(envelope, pretty=True) + "\n"
     ).encode("utf-8")
     try:
         _write_atomic(signature_target, encoded, 0o644)
@@ -260,6 +237,8 @@ def verify_artifact(
     artifact_path: Path,
     signature_path: Path,
     public_key_path: Path,
+    *,
+    artifact_name: str | None = None,
 ) -> dict[str, Any]:
     """Verifica envelope, identidade da chave e digest do arquivo atual."""
     target = signature_path.expanduser().resolve()
@@ -268,8 +247,8 @@ def verify_artifact(
     if target.stat().st_size > MAX_SIGNATURE_SIZE_BYTES:
         raise MiraiRuntimeError("assinatura excede o limite de 64 KB")
     try:
-        envelope = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        envelope = strict_json_loads(target.read_bytes(), label="envelope DSSE")
+    except (OSError, MiraiRuntimeError) as error:
         raise MiraiRuntimeError(f"envelope DSSE inválido: {error}") from error
     if not isinstance(envelope, dict) or set(envelope) != {
         "payloadType",
@@ -297,12 +276,12 @@ def verify_artifact(
     except InvalidSignature as error:
         raise MiraiRuntimeError("assinatura Ed25519 inválida") from error
     try:
-        signed_payload = json.loads(payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        signed_payload = strict_json_loads(payload, label="payload assinado")
+    except MiraiRuntimeError as error:
         raise MiraiRuntimeError("payload assinado não é JSON válido") from error
     if not isinstance(signed_payload, dict):
         raise MiraiRuntimeError("payload assinado possui formato inválido")
-    actual = _artifact_payload(artifact_path)
+    actual = _artifact_payload(artifact_path, artifact_name=artifact_name)
     for field in ("version", "kind", "name", "sha256", "size_bytes"):
         if signed_payload.get(field) != actual[field]:
             raise MiraiRuntimeError(f"artefato não corresponde à assinatura ({field})")

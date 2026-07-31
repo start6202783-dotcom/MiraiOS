@@ -20,10 +20,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -45,10 +45,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
           cache: pip
@@ -67,17 +67,53 @@ jobs:
           python -m compileall -q src tests scripts
           python -m pytest
 
-  package:
-    name: Build distribution
-    needs: [test, arm64]
+  quality:
+    name: Quality and security gates
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --editable ".[dev]"
+
+      - name: Lint
+        run: python -m ruff check src tests
+
+      - name: Type-check
+        run: python -m mypy src/mirai --cache-dir=/tmp/miraios-mypy-cache
+
+      - name: Security scan
+        run: python -m bandit -q -r src/mirai
+
+      - name: Dependency audit
+        run: python -m pip_audit --requirement requirements.txt
+
+      - name: Branch coverage
+        run: |
+          python -m coverage run -m pytest
+          python -m coverage report
+
+  package:
+    name: Build distribution
+    needs: [test, arm64, quality]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
           cache: pip
@@ -100,7 +136,7 @@ jobs:
           sha256sum *.whl *.tar.gz > SHA256SUMS
 
       - name: Upload release bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: miraios-${{ github.sha }}
           path: |

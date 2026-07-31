@@ -8,7 +8,6 @@ from typing import Any
 
 from .errors import MiraiRuntimeError
 
-
 PROVIDER_PROFILES: dict[str, tuple[str, ...] | None] = {
     "auto": None,
     "cpu": ("CPUExecutionProvider",),
@@ -40,7 +39,7 @@ def resolve_provider_profile(
     normalized = normalize_provider_profile(profile)
     available = list(dict.fromkeys(available_providers))
     if normalized == "auto":
-        preferred = [
+        preferred: list[str] = [
             provider
             for provider in (
                 "CUDAExecutionProvider",
@@ -56,7 +55,8 @@ def resolve_provider_profile(
         return preferred
 
     requested = PROVIDER_PROFILES[normalized]
-    assert requested is not None
+    if requested is None:
+        raise MiraiRuntimeError("perfil automático não foi resolvido")
     primary = requested[0]
     if primary not in available:
         raise MiraiRuntimeError(
@@ -108,9 +108,7 @@ def list_runtime_backends() -> list[dict[str, Any]]:
     ]
     try:
         discovered = metadata.entry_points(group="mirai.runtime_backends")
-    except TypeError:  # Python/importlib.metadata antigo.
-        discovered = metadata.entry_points().get("mirai.runtime_backends", [])
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - fronteira de plugins de terceiros.
         raise MiraiRuntimeError(
             f"não foi possível descobrir plugins de runtime: {error}"
         ) from error

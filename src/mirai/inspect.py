@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from .errors import MiraiRuntimeError
-
+from .model_guard import ModelSafetyReport, inspect_model_safety
+from .package import MAX_MODEL_SIZE_BYTES
 
 ONNX_EXTENSION = ".onnx"
 BYTES_PER_KB = 1024
@@ -33,7 +34,7 @@ def ensure_model_path(model_path: Path) -> None:
         raise MiraiRuntimeError(error)
 
 
-def load_onnx_model(model_path: Path) -> tuple[Any, Any]:
+def load_onnx_model(model_path: Path) -> tuple[Any, Any, ModelSafetyReport]:
     """Carrega a biblioteca ONNX e o modelo solicitado."""
     ensure_model_path(model_path)
 
@@ -46,22 +47,37 @@ def load_onnx_model(model_path: Path) -> tuple[Any, Any]:
         ) from error
 
     try:
-        model = onnx.load(str(model_path))
+        size_bytes = model_path.stat().st_size
+        if size_bytes <= 0:
+            raise MiraiRuntimeError("modelo ONNX vazio")
+        if size_bytes > MAX_MODEL_SIZE_BYTES:
+            raise MiraiRuntimeError("modelo ONNX excede o limite de 512 MB")
+        model = onnx.load(str(model_path), load_external_data=False)
     except Exception as error:
+        if isinstance(error, MiraiRuntimeError):
+            raise
         raise MiraiRuntimeError(
             f"falha ao carregar o modelo ONNX: {error}"
         ) from error
-
-    return onnx, model
+    report = inspect_model_safety(model, onnx)
+    return onnx, model, report
 
 
 def validate_model(model_path: Path) -> float:
     """Valida a estrutura ONNX e retorna o tamanho do modelo em kilobytes."""
-    onnx, model = load_onnx_model(model_path)
+    size_kb, _ = validate_model_with_report(model_path)
+    return size_kb
+
+
+def validate_model_with_report(
+    model_path: Path,
+) -> tuple[float, ModelSafetyReport]:
+    """Valida e devolve a evidência produzida pela quarentena estrutural."""
+    onnx, model, report = load_onnx_model(model_path)
 
     try:
         onnx.checker.check_model(model)
-        return model_path.stat().st_size / BYTES_PER_KB
+        return model_path.stat().st_size / BYTES_PER_KB, report
     except Exception as error:
         raise MiraiRuntimeError(f"modelo ONNX inválido: {error}") from error
 
@@ -137,11 +153,17 @@ def print_value_info_section(
 
 def show_model_info(model_path: Path) -> None:
     """Carrega e exibe metadados estruturais de um modelo ONNX."""
-    onnx, model = load_onnx_model(model_path)
+    onnx, model, report = load_onnx_model(model_path)
     print(f"[MiraiOS] Informações do modelo: {model_path.name}")
     print_value_info_section("Entradas", model.graph.input, onnx)
     print_value_info_section("Saídas", model.graph.output, onnx)
     print(f"[MiraiOS] Total de nós: {len(model.graph.node)}")
+    print(
+        "[MiraiOS] Quarentena: "
+        f"{report.graph_count} grafo(s), "
+        f"{report.initializer_count} initializer(s), "
+        "dados externos bloqueados"
+    )
 
 
 def show_artifact_info(artifact_path: Path) -> None:

@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
+import math
 import socket
 import time
-import math
 from dataclasses import dataclass
 from typing import Any
 
 from .errors import MiraiRuntimeError
-
 
 SERVICE_TYPE = "_miraios._tcp.local."
 

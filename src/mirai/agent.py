@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import platform
 import re
@@ -13,20 +12,24 @@ import sys
 import tempfile
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
 
 from . import __version__
+from .admission import AdmissionPolicy, admit_artifact
 from .attachments import materialize_remote_inputs
-from .errors import MiraiRuntimeError
+from .audit import AuditLog
 from .discovery import AgentAdvertiser
-from .inspect import validate_model
+from .errors import MiraiRuntimeError
+from .inspect import validate_model_with_report
+from .json_codec import strict_json_dumps, strict_json_loads
 from .package import (
     MAX_MODEL_SIZE_BYTES,
     MAX_PACKAGE_SIZE_BYTES,
@@ -35,8 +38,8 @@ from .package import (
     load_mirai_package,
     validate_runtime_contract,
 )
-from .runtime import create_session, load_runtime_dependencies, run_model
 from .providers import hardware_profile, normalize_provider_profile
+from .runtime import create_session, load_runtime_dependencies, run_model
 from .security import (
     ACCESS_ROLES,
     AgentSecurity,
@@ -47,10 +50,13 @@ from .security import (
     is_loopback_host,
     role_allows,
 )
-
+from .storage import atomic_write_text, verify_file
 
 MAX_ARTIFACT_SIZE_BYTES = MAX_PACKAGE_SIZE_BYTES
 MAX_JSON_BODY_BYTES = 14 * 1024 * 1024
+MAX_CONCURRENT_REQUESTS = 32
+MAX_PARALLEL_WORK = 2
+REQUEST_SOCKET_TIMEOUT_SECONDS = 15.0
 DEPLOYMENT_REGISTRY_VERSION = 1
 SAFE_MODEL_NAME_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 DEPLOYMENT_ID_PATTERN = re.compile(r"^[0-9a-f]{16}$")
@@ -86,14 +92,25 @@ class AgentState:
         secure: bool = False,
         security_clock: Callable[[], datetime] | None = None,
         pairing_role: str = "admin",
+        admission_policy: AdmissionPolicy | None = None,
+        max_parallel_work: int = MAX_PARALLEL_WORK,
     ) -> None:
         self.data_dir = data_dir.expanduser().resolve()
         self.models_dir = self.data_dir / "models"
         self.packages_dir = self.data_dir / "packages"
-        self.events_path = self.data_dir / "events.jsonl"
+        self.legacy_events_path = self.data_dir / "events.jsonl"
+        self.audit = AuditLog(self.data_dir / "audit.jsonl")
         self.deployments_path = self.data_dir / "deployments.json"
         self._events_lock = threading.Lock()
         self._deployments_lock = threading.Lock()
+        self._integrity_cache: dict[Path, tuple[int, int, int, int, int]] = {}
+        if not 1 <= max_parallel_work <= MAX_CONCURRENT_REQUESTS:
+            raise MiraiRuntimeError(
+                "max_parallel_work deve estar entre 1 e "
+                f"{MAX_CONCURRENT_REQUESTS}"
+            )
+        self._work_slots = threading.BoundedSemaphore(max_parallel_work)
+        self.max_parallel_work = max_parallel_work
         self.models_dir.mkdir(parents=True, exist_ok=True)
         self.packages_dir.mkdir(parents=True, exist_ok=True)
         security_options: dict[str, Any] = {
@@ -106,6 +123,20 @@ class AgentState:
             self.data_dir,
             **security_options,
         )
+        self.admission_policy = admission_policy or AdmissionPolicy()
+
+    @contextmanager
+    def work_slot(self) -> Iterator[None]:
+        """Limita validações e inferências que consomem CPU/memória."""
+        if not self._work_slots.acquire(blocking=False):
+            raise AgentRequestError(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "o Agent atingiu o limite de operações pesadas simultâneas",
+            )
+        try:
+            yield
+        finally:
+            self._work_slots.release()
 
     def append_event(self, event: dict[str, Any]) -> None:
         """Acrescenta um evento JSONL de forma segura entre threads."""
@@ -114,22 +145,32 @@ class AgentState:
             **event,
         }
         with self._events_lock:
-            with self.events_path.open("a", encoding="utf-8") as event_file:
-                event_file.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            self.audit.append(payload)
 
     def recent_events(self, limit: int) -> list[dict[str, Any]]:
         """Retorna os eventos mais recentes, do mais novo para o mais antigo."""
-        if not self.events_path.exists():
-            return []
         with self._events_lock:
+            chained = self.audit.recent(limit)
+            if not self.legacy_events_path.exists():
+                return chained
             try:
-                lines = self.events_path.read_text(encoding="utf-8").splitlines()
-                events = [json.loads(line) for line in lines[-limit:]]
-            except (OSError, json.JSONDecodeError) as error:
+                lines = self.legacy_events_path.read_text(
+                    encoding="utf-8"
+                ).splitlines()
+                events = [
+                    strict_json_loads(line, label="evento do Agent")
+                    for line in lines[-limit:]
+                ]
+            except (OSError, MiraiRuntimeError) as error:
                 raise MiraiRuntimeError(
                     f"não foi possível ler os eventos do Agent: {error}"
                 ) from error
-        return list(reversed(events))
+        combined = [*chained, *reversed(events)]
+        combined.sort(
+            key=lambda item: str(item.get("timestamp", "")),
+            reverse=True,
+        )
+        return combined[:limit]
 
     def _empty_registry(self) -> dict[str, Any]:
         return {
@@ -142,10 +183,11 @@ class AgentState:
         if not self.deployments_path.exists():
             return self._empty_registry()
         try:
-            registry = json.loads(
-                self.deployments_path.read_text(encoding="utf-8")
+            registry = strict_json_loads(
+                self.deployments_path.read_bytes(),
+                label="registro de deployments",
             )
-        except (OSError, json.JSONDecodeError) as error:
+        except (OSError, MiraiRuntimeError) as error:
             raise MiraiRuntimeError(
                 f"não foi possível ler os deployments do Agent: {error}"
             ) from error
@@ -161,13 +203,12 @@ class AgentState:
         return registry
 
     def _save_registry_unlocked(self, registry: dict[str, Any]) -> None:
-        temporary_path = self.deployments_path.with_suffix(".tmp")
         try:
-            temporary_path.write_text(
-                json.dumps(registry, indent=2, ensure_ascii=False) + "\n",
-                encoding="utf-8",
+            atomic_write_text(
+                self.deployments_path,
+                strict_json_dumps(registry, pretty=True) + "\n",
+                mode=0o600,
             )
-            os.replace(temporary_path, self.deployments_path)
         except OSError as error:
             raise MiraiRuntimeError(
                 f"não foi possível salvar os deployments do Agent: {error}"
@@ -257,6 +298,15 @@ class AgentState:
                     HTTPStatus.NOT_FOUND,
                     f"deployment '{deployment_id}' não encontrado",
                 )
+            model_path = self._stored_path(
+                self.models_dir,
+                target.get("file_name"),
+            )
+            if model_path is None or not model_path.is_file():
+                raise MiraiRuntimeError(
+                    f"arquivo do deployment '{deployment_id}' não foi encontrado"
+                )
+            self._verify_deployment_model_unlocked(target, model_path)
 
             now = _utc_now()
             for item in registry["deployments"]:
@@ -334,7 +384,40 @@ class AgentState:
                 raise MiraiRuntimeError(
                     f"arquivo do deployment '{active_id}' não foi encontrado"
                 )
+            self._verify_deployment_model_unlocked(deployment, model_path)
             return _public_deployment(deployment), model_path
+
+    def _verify_deployment_model_unlocked(
+        self,
+        deployment: dict[str, Any],
+        model_path: Path,
+    ) -> None:
+        try:
+            stat_result = model_path.stat()
+        except OSError as error:
+            raise MiraiRuntimeError(
+                f"não foi possível inspecionar o modelo: {error}"
+            ) from error
+        fingerprint = (
+            stat_result.st_dev,
+            stat_result.st_ino,
+            stat_result.st_size,
+            stat_result.st_mtime_ns,
+            stat_result.st_ctime_ns,
+        )
+        if self._integrity_cache.get(model_path) == fingerprint:
+            return
+        verify_file(
+            model_path,
+            expected_sha256=str(
+                deployment.get("model_sha256", deployment.get("sha256", ""))
+            ),
+            expected_size=int(
+                deployment.get("model_size_bytes", deployment.get("size_bytes", -1))
+            ),
+            label=f"modelo do deployment '{deployment['deployment_id']}'",
+        )
+        self._integrity_cache[model_path] = fingerprint
 
     @staticmethod
     def _stored_path(directory: Path, file_name: Any) -> Path | None:
@@ -411,6 +494,8 @@ class AgentState:
                     raise MiraiRuntimeError(
                         f"deployment removido, mas o tombstone não pôde ser apagado: {error}"
                     ) from error
+            for original, _ in moved:
+                self._integrity_cache.pop(original, None)
             return _public_deployment(target)
 
 
@@ -418,6 +503,7 @@ class MiraiAgentServer(ThreadingHTTPServer):
     """Servidor HTTP com estado explícito do Agent."""
 
     daemon_threads = True
+    request_queue_size = 64
 
     def __init__(
         self,
@@ -426,6 +512,9 @@ class MiraiAgentServer(ThreadingHTTPServer):
     ) -> None:
         super().__init__(server_address, MiraiAgentHandler)
         self.state = state
+        self._request_slots = threading.BoundedSemaphore(
+            MAX_CONCURRENT_REQUESTS
+        )
         self.secure = state.security.secure
         if self.secure:
             context = state.security.create_server_context()
@@ -434,9 +523,45 @@ class MiraiAgentServer(ThreadingHTTPServer):
                 server_side=True,
             )
 
+    def get_request(self) -> tuple[socket.socket, tuple[str, int]]:
+        request, client_address = super().get_request()
+        request.settimeout(REQUEST_SOCKET_TIMEOUT_SECONDS)
+        return request, client_address
+
+    def process_request(
+        self,
+        request: socket.socket | tuple[bytes, socket.socket],
+        client_address: tuple[str, int],
+    ) -> None:
+        request_socket = cast(socket.socket, request)
+        if not self._request_slots.acquire(blocking=False):
+            try:
+                request_socket.sendall(
+                    b"HTTP/1.0 503 Service Unavailable\r\n"
+                    b"Connection: close\r\nContent-Length: 0\r\n\r\n"
+                )
+            finally:
+                self.shutdown_request(request_socket)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(
+        self,
+        request: socket.socket | tuple[bytes, socket.socket],
+        client_address: tuple[str, int],
+    ) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
+
     def handle_error(
         self,
-        request: object,
+        request: socket.socket | tuple[bytes, socket.socket],
         client_address: tuple[str, int],
     ) -> None:
         """Silencia desconexões normais durante a verificação do TLS."""
@@ -454,20 +579,30 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
 
     server: MiraiAgentServer
     authenticated_client: dict[str, Any] | None = None
+    server_version = "MiraiOS"
+    sys_version = ""
+
+    def version_string(self) -> str:
+        return "MiraiOS"
 
     def log_message(self, format: str, *args: object) -> None:
         """Evita duplicar no stderr os eventos persistidos pelo Agent."""
 
     def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
-        encoded_payload = json.dumps(
-            payload,
-            ensure_ascii=False,
-        ).encode("utf-8")
+        try:
+            encoded_payload = strict_json_dumps(payload).encode("utf-8")
+        except MiraiRuntimeError:
+            status = HTTPStatus.INTERNAL_SERVER_ERROR
+            encoded_payload = (
+                b'{"error":"resposta do Agent nao pode ser serializada"}'
+            )
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(encoded_payload)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "default-src 'none'")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Mirai-Agent-Version", __version__)
         self.end_headers()
         self.wfile.write(encoded_payload)
@@ -491,9 +626,8 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
             )
         except AuthenticationDenied as error:
             self.send_response(HTTPStatus.UNAUTHORIZED)
-            encoded_payload = json.dumps(
-                {"error": str(error)},
-                ensure_ascii=False,
+            encoded_payload = strict_json_dumps(
+                {"error": str(error)}
             ).encode("utf-8")
             self.send_header(
                 "Content-Type",
@@ -513,7 +647,12 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
                 str(error),
             )
             return False
-        assert self.authenticated_client is not None
+        if self.authenticated_client is None:
+            self._send_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "autenticação concluída sem identidade do cliente",
+            )
+            return False
         if not role_allows(
             str(self.authenticated_client.get("role", "viewer")),
             required_role,
@@ -540,6 +679,11 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
                     "pairing_available": (
                         self.server.state.security.pairing_available()
                     ),
+                    "limits": {
+                        "parallel_work": self.server.state.max_parallel_work,
+                        "requests": MAX_CONCURRENT_REQUESTS,
+                        "socket_timeout_seconds": REQUEST_SOCKET_TIMEOUT_SECONDS,
+                    },
                 },
             )
             return
@@ -593,6 +737,27 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, {"events": events})
             return
 
+        if request_url.path == "/v1/audit":
+            try:
+                audit = self.server.state.audit.verify()
+                legacy_records = (
+                    len(
+                        self.server.state.legacy_events_path.read_text(
+                            encoding="utf-8"
+                        ).splitlines()
+                    )
+                    if self.server.state.legacy_events_path.exists()
+                    else 0
+                )
+            except (OSError, MiraiRuntimeError) as error:
+                self._send_error(HTTPStatus.UNPROCESSABLE_ENTITY, str(error))
+                return
+            self._send_json(
+                HTTPStatus.OK,
+                {**audit, "legacy_records": legacy_records},
+            )
+            return
+
         if request_url.path == "/v1/clients":
             try:
                 clients = self.server.state.security.list_clients()
@@ -618,10 +783,12 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
             elif not self._authorize("operator"):
                 return
             elif request_path == "/v1/deployments":
-                payload = receive_deployment(self, self.server.state)
+                with self.server.state.work_slot():
+                    payload = receive_deployment(self, self.server.state)
                 status = HTTPStatus.CREATED
             elif request_path == "/v1/inferences":
-                payload = receive_inference(self, self.server.state)
+                with self.server.state.work_slot():
+                    payload = receive_inference(self, self.server.state)
                 status = HTTPStatus.OK
             elif request_path == "/v1/deployments/deactivate":
                 payload = deactivate_deployment(self.server.state)
@@ -657,6 +824,12 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
         except MiraiRuntimeError as error:
             self._send_error(HTTPStatus.UNPROCESSABLE_ENTITY, str(error))
             return
+        except TimeoutError:
+            self._send_error(
+                HTTPStatus.REQUEST_TIMEOUT,
+                "requisição excedeu o tempo limite",
+            )
+            return
         except OSError as error:
             self._send_error(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -665,6 +838,12 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
             return
 
         self._send_json(status, payload)
+
+    def do_PUT(self) -> None:
+        self._send_error(HTTPStatus.METHOD_NOT_ALLOWED, "método não permitido")
+
+    def do_OPTIONS(self) -> None:
+        self._send_error(HTTPStatus.METHOD_NOT_ALLOWED, "método não permitido")
 
     def do_PATCH(self) -> None:
         """Altera papéis de acesso com uma credencial administrativa."""
@@ -686,13 +865,19 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
                 match.group(1),
                 str(payload["role"]),
             )
+            actor = self.authenticated_client
+            if actor is None:
+                raise AgentRequestError(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    "operação autenticada sem identidade do cliente",
+                )
             self.server.state.append_event(
                 {
                     "type": "role_change",
                     "status": "success",
                     "client_id": client["client_id"],
                     "role": client["role"],
-                    "actor_client_id": self.authenticated_client["client_id"],
+                    "actor_client_id": actor["client_id"],
                 }
             )
         except AgentRequestError as error:
@@ -789,7 +974,7 @@ def collect_device_info(state: AgentState | None = None) -> dict[str, Any]:
         "cpu_count": os.cpu_count(),
         "memory_total_bytes": _memory_total_bytes(),
         "providers": providers,
-        "provider_profiles": list(("auto", "cpu", "cuda", "directml")),
+        "provider_profiles": ["auto", "cpu", "cuda", "directml"],
         "hardware_profile": hardware_profile(machine, system, providers),
     }
 
@@ -881,11 +1066,11 @@ def _json_body(handler: MiraiAgentHandler) -> dict[str, Any]:
             "corpo JSON interrompido antes do fim",
         )
     try:
-        payload = json.loads(raw_body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        payload = strict_json_loads(raw_body, label="corpo JSON")
+    except MiraiRuntimeError as error:
         raise AgentRequestError(
             HTTPStatus.BAD_REQUEST,
-            "corpo JSON inválido",
+            str(error),
         ) from error
     if not isinstance(payload, dict):
         raise AgentRequestError(
@@ -909,6 +1094,56 @@ def _remote_input_specs(payload: dict[str, Any]) -> list[str] | None:
         )
 
     return input_specs
+
+
+def _install_verified_file(
+    source: Path,
+    target: Path,
+    *,
+    expected_sha256: str,
+    expected_size: int,
+) -> bool:
+    """Instala por conteúdo; um alvo idêntico é reutilizado sem sobrescrita."""
+    if target.exists():
+        verify_file(
+            target,
+            expected_sha256=expected_sha256,
+            expected_size=expected_size,
+            label=f"arquivo armazenado '{target.name}'",
+        )
+        source.unlink(missing_ok=True)
+        return False
+    try:
+        os.link(source, target, follow_symlinks=False)
+    except FileExistsError:
+        verify_file(
+            target,
+            expected_sha256=expected_sha256,
+            expected_size=expected_size,
+            label=f"arquivo armazenado '{target.name}'",
+        )
+        source.unlink(missing_ok=True)
+        return False
+    except OSError as error:
+        raise MiraiRuntimeError(
+            f"não foi possível instalar '{target.name}' sem sobrescrita: {error}"
+        ) from error
+    source.unlink(missing_ok=True)
+    try:
+        os.chmod(target, 0o444)
+    except OSError:
+        pass
+    try:
+        verify_file(
+            target,
+            expected_sha256=expected_sha256,
+            expected_size=expected_size,
+            label=f"arquivo armazenado '{target.name}'",
+        )
+    except BaseException:
+        target.unlink(missing_ok=True)
+        raise
+    return True
 
 
 def receive_pairing(
@@ -998,6 +1233,13 @@ def receive_deployment(
                 "SHA-256 do artefato não confere",
             )
 
+        admission = admit_artifact(
+            temporary_path,
+            handler.headers.get("X-Mirai-Signature"),
+            state.admission_policy,
+            artifact_name=artifact_name,
+        )
+
         package_file_name: str | None = None
         contract: dict[str, Any] | None = None
         package_metadata: dict[str, Any] | None = None
@@ -1033,7 +1275,7 @@ def receive_deployment(
             model_sha256 = actual_sha256
             model_size_bytes = content_length
 
-        validate_model(model_path)
+        _, model_safety = validate_model_with_report(model_path)
         ort, _ = load_runtime_dependencies()
         session = create_session(model_path, ort, provider_profile)
         if contract is not None:
@@ -1047,48 +1289,74 @@ def receive_deployment(
 
         deployment_id = actual_sha256[:16]
         target_path = state.models_dir / f"{deployment_id}-{model_name}"
-        if artifact_suffix == MIRAI_EXTENSION:
-            if temporary_model_path is None:
-                raise MiraiRuntimeError(
-                    "modelo temporário do pacote não foi preparado"
+        installed: list[Path] = []
+        try:
+            if artifact_suffix == MIRAI_EXTENSION:
+                if temporary_model_path is None:
+                    raise MiraiRuntimeError(
+                        "modelo temporário do pacote não foi preparado"
+                    )
+                if _install_verified_file(
+                    temporary_model_path,
+                    target_path,
+                    expected_sha256=model_sha256,
+                    expected_size=model_size_bytes,
+                ):
+                    installed.append(target_path)
+                temporary_model_path = None
+                package_target = (
+                    state.packages_dir / f"{deployment_id}-{artifact_name}"
                 )
-            os.replace(temporary_model_path, target_path)
-            temporary_model_path = None
-            package_target = (
-                state.packages_dir / f"{deployment_id}-{artifact_name}"
-            )
-            os.replace(temporary_path, package_target)
-            temporary_path = None
-            package_file_name = package_target.name
-        else:
-            os.replace(temporary_path, target_path)
-            temporary_path = None
+                if _install_verified_file(
+                    temporary_path,
+                    package_target,
+                    expected_sha256=actual_sha256,
+                    expected_size=content_length,
+                ):
+                    installed.append(package_target)
+                temporary_path = None
+                package_file_name = package_target.name
+            else:
+                if _install_verified_file(
+                    temporary_path,
+                    target_path,
+                    expected_sha256=model_sha256,
+                    expected_size=model_size_bytes,
+                ):
+                    installed.append(target_path)
+                temporary_path = None
 
-        deployment_data = {
-            "status": "ready",
-            "deployment_id": deployment_id,
-            "model": model_name,
-            "artifact_name": artifact_name,
-            "artifact_type": (
-                "mirai" if artifact_suffix == MIRAI_EXTENSION else "onnx"
-            ),
-            "sha256": actual_sha256,
-            "size_bytes": content_length,
-            "model_sha256": model_sha256,
-            "model_size_bytes": model_size_bytes,
-            "providers": providers,
-            "provider_profile": provider_profile,
-        }
-        if package_metadata is not None:
-            deployment_data["package"] = package_metadata
-        if contract is not None:
-            deployment_data["contract"] = contract
-        if package_file_name is not None:
-            deployment_data["package_file_name"] = package_file_name
-        deployment = state.register_deployment(
-            deployment_data,
-            target_path.name,
-        )
+            deployment_data = {
+                "status": "ready",
+                "deployment_id": deployment_id,
+                "model": model_name,
+                "artifact_name": artifact_name,
+                "artifact_type": (
+                    "mirai" if artifact_suffix == MIRAI_EXTENSION else "onnx"
+                ),
+                "sha256": actual_sha256,
+                "size_bytes": content_length,
+                "model_sha256": model_sha256,
+                "model_size_bytes": model_size_bytes,
+                "providers": providers,
+                "provider_profile": provider_profile,
+                "admission": admission,
+                "model_safety": model_safety.as_dict(),
+            }
+            if package_metadata is not None:
+                deployment_data["package"] = package_metadata
+            if contract is not None:
+                deployment_data["contract"] = contract
+            if package_file_name is not None:
+                deployment_data["package_file_name"] = package_file_name
+            deployment = state.register_deployment(
+                deployment_data,
+                target_path.name,
+            )
+        except BaseException:
+            for installed_path in reversed(installed):
+                installed_path.unlink(missing_ok=True)
+            raise
         state.append_event({"type": "deployment", **deployment})
         return deployment
     finally:
@@ -1212,6 +1480,8 @@ def create_agent_server(
     secure: bool = False,
     security_clock: Callable[[], datetime] | None = None,
     pairing_role: str = "admin",
+    admission_policy: AdmissionPolicy | None = None,
+    max_parallel_work: int = MAX_PARALLEL_WORK,
 ) -> MiraiAgentServer:
     """Cria um servidor configurável, inclusive com porta efêmera em testes."""
     return MiraiAgentServer(
@@ -1221,6 +1491,8 @@ def create_agent_server(
             secure=secure,
             security_clock=security_clock,
             pairing_role=pairing_role,
+            admission_policy=admission_policy,
+            max_parallel_work=max_parallel_work,
         ),
     )
 
@@ -1233,6 +1505,8 @@ def run_agent(
     force_secure: bool = False,
     pairing_role: str = "admin",
     discoverable: bool = False,
+    admission_mode: str = "open",
+    trusted_keys: tuple[Path, ...] = (),
 ) -> None:
     """Executa o Agent até receber interrupção do processo."""
     secure = force_secure or not is_loopback_host(host)
@@ -1242,8 +1516,11 @@ def run_agent(
         data_dir,
         secure=secure,
         pairing_role=pairing_role,
+        admission_policy=AdmissionPolicy(admission_mode, trusted_keys),
     )
     actual_host, actual_port = server.server_address[:2]
+    if not isinstance(actual_host, str) or not isinstance(actual_port, int):
+        raise MiraiRuntimeError("endereço do Agent possui formato inesperado")
     scheme = "https" if secure else "http"
     print(
         f"[MiraiOS] Agent v{__version__} ouvindo em "
@@ -1253,10 +1530,12 @@ def run_agent(
     if secure:
         security = server.state.security
         print(f"[MiraiOS] Agent ID: {security.agent_id}")
-        assert security.fingerprint is not None
+        fingerprint = security.fingerprint
+        if fingerprint is None:
+            raise MiraiRuntimeError("identidade TLS ativa sem fingerprint")
         print(
             "[MiraiOS] Fingerprint TLS SHA-256: "
-            f"{format_fingerprint(security.fingerprint)}"
+            f"{format_fingerprint(fingerprint)}"
         )
         print(
             "[MiraiOS] Código de pareamento (uso único): "
@@ -1273,12 +1552,16 @@ def run_agent(
         print(
             "[MiraiOS] Modo local sem autenticação; somente localhost."
         )
+    print(f"[MiraiOS] Política de admissão: {admission_mode}")
+    if trusted_keys:
+        print(f"[MiraiOS] Chaves confiáveis: {len(trusted_keys)}")
     advertiser: AgentAdvertiser | None = None
     if discoverable:
         try:
+            # O valor somente substitui o endereço do anúncio mDNS; não abre socket.
             advertised_host = (
                 socket.gethostbyname(socket.gethostname())
-                if host in {"0.0.0.0", "::"}
+                if host in {"0.0.0.0", "::"}  # nosec B104
                 else host
             )
             advertiser = AgentAdvertiser(

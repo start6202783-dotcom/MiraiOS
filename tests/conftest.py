@@ -13,7 +13,6 @@ from PIL import Image
 
 from mirai.package import create_mirai_package
 
-
 TEST_MODEL_IR_VERSION = 10
 
 

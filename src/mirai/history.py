@@ -10,7 +10,6 @@ from typing import Any
 
 from .errors import MiraiRuntimeError
 
-
 MAX_REPORT_SIZE_BYTES = 2 * 1024 * 1024
 RUN_ID_PATTERN = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{8}$")
 VALID_STATUSES = {"passed", "failed", "running"}

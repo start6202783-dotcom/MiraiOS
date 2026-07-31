@@ -12,7 +12,6 @@ from onnx import TensorProto
 from mirai.errors import MiraiRuntimeError
 from mirai.runtime import prepare_inference, run_model
 
-
 ModelFactory = Callable[[str, list[int | str | None], int], Path]
 
 
