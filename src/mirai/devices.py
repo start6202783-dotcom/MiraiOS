@@ -14,10 +14,13 @@ from .errors import MiraiRuntimeError
 from .security import ACCESS_ROLES, normalize_fingerprint
 
 DEVICE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+TAG_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9._-]{0,31}$")
+TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,256}$")
 AGENT_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 CLIENT_ID_PATTERN = re.compile(r"^[0-9a-f]{16}$")
-DEVICE_REGISTRY_VERSION = 3
+DEVICE_REGISTRY_VERSION = 4
+MAX_DEVICE_TAGS = 32
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +34,7 @@ class Device:
     agent_id: str | None = None
     client_id: str | None = None
     role: str | None = None
+    tags: tuple[str, ...] = ()
 
     @property
     def paired(self) -> bool:
@@ -59,6 +63,56 @@ def normalize_device_name(name: str) -> str:
             "hífen ou sublinhado (máximo de 64 caracteres)"
         )
     return name
+
+
+def normalize_tag_key(key: str) -> str:
+    """Normaliza uma chave curta usada por seletores do control plane."""
+    normalized = key.strip().lower()
+    if not TAG_KEY_PATTERN.fullmatch(normalized):
+        raise MiraiRuntimeError(
+            "chave de tag inválida; use letras minúsculas, números, ponto, "
+            "hífen ou sublinhado (máximo de 32 caracteres)"
+        )
+    return normalized
+
+
+def normalize_tag_value(value: str) -> str:
+    """Valida o valor não secreto de uma tag de dispositivo."""
+    normalized = value.strip()
+    if not TAG_VALUE_PATTERN.fullmatch(normalized):
+        raise MiraiRuntimeError(
+            "valor de tag inválido; use letras, números, ponto, hífen ou "
+            "sublinhado (máximo de 64 caracteres)"
+        )
+    return normalized
+
+
+def normalize_device_tags(tags: object) -> tuple[str, ...]:
+    """Valida e ordena tags no formato ``chave=valor``."""
+    if tags is None:
+        return ()
+    if not isinstance(tags, (list, tuple)):
+        raise MiraiRuntimeError("tags do dispositivo possuem formato inválido")
+    if len(tags) > MAX_DEVICE_TAGS:
+        raise MiraiRuntimeError(f"um dispositivo aceita no máximo {MAX_DEVICE_TAGS} tags")
+    normalized: dict[str, str] = {}
+    for raw_tag in tags:
+        if not isinstance(raw_tag, str):
+            raise MiraiRuntimeError("tags do dispositivo devem ser strings")
+        key, separator, value = raw_tag.partition("=")
+        if not separator:
+            raise MiraiRuntimeError("tag deve usar o formato chave=valor")
+        normalized_key = normalize_tag_key(key)
+        normalized_value = normalize_tag_value(value)
+        if normalized_key in normalized:
+            raise MiraiRuntimeError(f"tag duplicada para a chave '{normalized_key}'")
+        normalized[normalized_key] = normalized_value
+    return tuple(f"{key}={value}" for key, value in sorted(normalized.items()))
+
+
+def device_tag_map(device: Device) -> dict[str, str]:
+    """Converte as tags já validadas de um dispositivo em mapa."""
+    return dict(tag.split("=", 1) for tag in device.tags)
 
 
 def normalize_agent_url(url: str) -> str:
@@ -113,19 +167,14 @@ def _normalize_optional_credentials(
             return None, None, None, None, None
         if not is_loopback_agent_url(url):
             raise MiraiRuntimeError(
-                "Agents fora de localhost exigem pareamento; "
-                "use 'mirai device pair'"
+                "Agents fora de localhost exigem pareamento; use 'mirai device pair'"
             )
         if urlsplit(url).scheme == "https":
-            raise MiraiRuntimeError(
-                "uma URL HTTPS exige fingerprint e credenciais de pareamento"
-            )
+            raise MiraiRuntimeError("uma URL HTTPS exige fingerprint e credenciais de pareamento")
         return None, None, None, None, None
 
     if not all(isinstance(value, str) and value for value in provided):
-        raise MiraiRuntimeError(
-            "credenciais do dispositivo estão incompletas"
-        )
+        raise MiraiRuntimeError("credenciais do dispositivo estão incompletas")
     if (
         not isinstance(token, str)
         or not isinstance(tls_fingerprint, str)
@@ -134,9 +183,7 @@ def _normalize_optional_credentials(
     ):
         raise MiraiRuntimeError("credenciais do dispositivo estão incompletas")
     if urlsplit(url).scheme != "https":
-        raise MiraiRuntimeError(
-            "credenciais de pareamento só podem ser usadas com HTTPS"
-        )
+        raise MiraiRuntimeError("credenciais de pareamento só podem ser usadas com HTTPS")
     if not TOKEN_PATTERN.fullmatch(token):
         raise MiraiRuntimeError("token do dispositivo possui formato inválido")
     normalized_fingerprint = normalize_fingerprint(tls_fingerprint)
@@ -163,10 +210,12 @@ def load_devices(path: Path | None = None) -> dict[str, Device]:
             f"não foi possível ler o registro de dispositivos: {error}"
         ) from error
 
-    if (
-        not isinstance(raw_data, dict)
-        or raw_data.get("version") not in {1, 2, DEVICE_REGISTRY_VERSION}
-    ):
+    if not isinstance(raw_data, dict) or raw_data.get("version") not in {
+        1,
+        2,
+        3,
+        DEVICE_REGISTRY_VERSION,
+    }:
         raise MiraiRuntimeError("registro de dispositivos possui formato incompatível")
 
     raw_devices = raw_data.get("devices")
@@ -179,16 +228,14 @@ def load_devices(path: Path | None = None) -> dict[str, Device]:
         for item in raw_devices:
             name = normalize_device_name(item["name"])
             url = normalize_agent_url(item["url"])
-            token, fingerprint, agent_id, client_id, role = (
-                _normalize_optional_credentials(
-                    url=url,
-                    token=item.get("token"),
-                    tls_fingerprint=item.get("tls_fingerprint"),
-                    agent_id=item.get("agent_id"),
-                    client_id=item.get("client_id"),
-                    role=item.get("role"),
-                    allow_legacy_unpaired=legacy_registry,
-                )
+            token, fingerprint, agent_id, client_id, role = _normalize_optional_credentials(
+                url=url,
+                token=item.get("token"),
+                tls_fingerprint=item.get("tls_fingerprint"),
+                agent_id=item.get("agent_id"),
+                client_id=item.get("client_id"),
+                role=item.get("role"),
+                allow_legacy_unpaired=legacy_registry,
             )
             devices[name] = Device(
                 name=name,
@@ -198,6 +245,7 @@ def load_devices(path: Path | None = None) -> dict[str, Device]:
                 agent_id=agent_id,
                 client_id=client_id,
                 role=role,
+                tags=normalize_device_tags(item.get("tags", [])),
             )
     except (KeyError, TypeError, MiraiRuntimeError) as error:
         raise MiraiRuntimeError("registro de dispositivos está corrompido") from error
@@ -214,8 +262,7 @@ def save_devices(
     payload = {
         "version": DEVICE_REGISTRY_VERSION,
         "devices": [
-            asdict(device)
-            for device in sorted(devices.values(), key=lambda item: item.name)
+            asdict(device) for device in sorted(devices.values(), key=lambda item: item.name)
         ],
     }
     temporary_path = registry_path.with_name(f".{registry_path.name}.tmp")
@@ -226,9 +273,7 @@ def save_devices(
             0o600,
         )
         with os.fdopen(descriptor, "w", encoding="utf-8") as registry_file:
-            registry_file.write(
-                json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
-            )
+            registry_file.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
         os.replace(temporary_path, registry_path)
         try:
             os.chmod(registry_path, 0o600)
@@ -252,6 +297,7 @@ def add_device(
     agent_id: str | None = None,
     client_id: str | None = None,
     role: str | None = None,
+    tags: tuple[str, ...] | list[str] | None = None,
 ) -> Device:
     """Adiciona um Agent ao registro local."""
     normalized_name = normalize_device_name(name)
@@ -278,12 +324,11 @@ def add_device(
         agent_id=normalized_agent_id,
         client_id=normalized_client_id,
         role=normalized_role,
+        tags=normalize_device_tags(tags),
     )
     devices = load_devices(path)
     if normalized_name in devices and not replace:
-        raise MiraiRuntimeError(
-            f"dispositivo '{normalized_name}' já está cadastrado"
-        )
+        raise MiraiRuntimeError(f"dispositivo '{normalized_name}' já está cadastrado")
     devices[normalized_name] = device
     save_devices(devices, path)
     return device
@@ -296,9 +341,7 @@ def get_device(name: str, path: Path | None = None) -> Device:
     try:
         return devices[normalized_name]
     except KeyError as error:
-        raise MiraiRuntimeError(
-            f"dispositivo '{normalized_name}' não está cadastrado"
-        ) from error
+        raise MiraiRuntimeError(f"dispositivo '{normalized_name}' não está cadastrado") from error
 
 
 def remove_device(name: str, path: Path | None = None) -> Device:
@@ -308,8 +351,43 @@ def remove_device(name: str, path: Path | None = None) -> Device:
     try:
         device = devices.pop(normalized_name)
     except KeyError as error:
-        raise MiraiRuntimeError(
-            f"dispositivo '{normalized_name}' não está cadastrado"
-        ) from error
+        raise MiraiRuntimeError(f"dispositivo '{normalized_name}' não está cadastrado") from error
     save_devices(devices, path)
     return device
+
+
+def update_device_tags(
+    name: str,
+    *,
+    set_tags: tuple[str, ...] | list[str] = (),
+    remove_keys: tuple[str, ...] | list[str] = (),
+    path: Path | None = None,
+) -> Device:
+    """Atualiza tags atomicamente sem alterar credenciais do dispositivo."""
+    normalized_name = normalize_device_name(name)
+    devices = load_devices(path)
+    try:
+        current = devices[normalized_name]
+    except KeyError as error:
+        raise MiraiRuntimeError(f"dispositivo '{normalized_name}' não está cadastrado") from error
+
+    merged = device_tag_map(current)
+    for key in remove_keys:
+        merged.pop(normalize_tag_key(key), None)
+    for tag in normalize_device_tags(set_tags):
+        key, value = tag.split("=", 1)
+        merged[key] = value
+    normalized_tags = normalize_device_tags([f"{key}={value}" for key, value in merged.items()])
+    updated = Device(
+        name=current.name,
+        url=current.url,
+        token=current.token,
+        tls_fingerprint=current.tls_fingerprint,
+        agent_id=current.agent_id,
+        client_id=current.client_id,
+        role=current.role,
+        tags=normalized_tags,
+    )
+    devices[normalized_name] = updated
+    save_devices(devices, path)
+    return updated

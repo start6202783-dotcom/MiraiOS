@@ -16,7 +16,7 @@ em dispositivos Edge.**
 [Começar](#comece-em-3-minutos) ·
 [Mirai Pilot](#mirai-pilot) ·
 [Parear](#conecte-um-dispositivo-na-rede) ·
-[Mirai Shield](#o-marco-da-v012) ·
+[v0.13](#o-marco-da-v013) ·
 [Arquitetura](#arquitetura) ·
 [CLI](#comandos) ·
 [Roadmap](#roadmap)
@@ -42,7 +42,27 @@ começar.
 > **Do modelo ao dispositivo físico em um único fluxo verificável, com
 > critérios e rollback.**
 
-## O marco da v0.12
+## O marco da v0.13
+
+A v0.13 conecta as garantias das versões anteriores em um ciclo operacional:
+
+```text
+gerar variante → aprovar → planejar → canário → observar → ancorar
+```
+
+| Pilar | Entrega |
+| --- | --- |
+| **Fleet Control** | Tags, seletores, canário, lotes, gate cumulativo e rollback global. |
+| **External Audit** | Checkpoint fora do Agent e prova criptográfica de extensão da cadeia conhecida. |
+| **Observability** | JSON, Prometheus, erro, P95 e sinais heurísticos de drift sem persistir entradas ou saídas brutas. |
+| **Mirai Fit v1** | Dynamic INT8, comparação numérica, benchmark, gates, staging transacional e assinatura opcional. |
+
+O rollout é uma simulação por padrão e exige `--apply` para alterar Agents. O
+Fit publica um pacote novo somente quando os gates passam; ele nunca otimiza
+silenciosamente dentro do dispositivo. Veja os contratos e limites em
+[Projeto Hikari v0.13](docs/hikari-v0.13.md).
+
+## A base de segurança da v0.12
 
 ![Demonstração do Mirai Package no MiraiOS](https://raw.githubusercontent.com/start6202783-dotcom/MiraiOS/main/docs/assets/miraios-demo.gif)
 
@@ -59,7 +79,7 @@ silenciosamente à inferência.
 | **Fixe a identidade** | Pacote e modelo são instalados por conteúdo, somente leitura, e verificados novamente antes de ativar ou inferir. |
 | **Registre** | Cada evento entra em uma cadeia SHA-256 com sequência, hash anterior e checkpoint durável. |
 | **Limite** | Timeout, fila, concorrência de requisições e operações pesadas reduzem abuso de recursos. |
-| **Teste** | 1.239 testes, incluindo um corpus determinístico com 1.024 casos hostis e propriedades geradas. |
+| **Teste** | 1.371 testes, incluindo um corpus determinístico com 1.024 casos hostis e 132 cenários próprios da v0.13. |
 
 O desenho e as decisões estão em [Projeto Hikari v0.12](docs/hikari-v0.12.md),
 o modelo de ameaças em [docs/threat-model.md](docs/threat-model.md) e a
@@ -89,7 +109,7 @@ pesquisa que orientou a implementação em
 
 ## Status atual
 
-| Capacidade | v0.12 |
+| Capacidade | v0.13 |
 | --- | --- |
 | Validação estrutural com `onnx.checker` | Pronto |
 | Pacote `.mirai` determinístico com manifesto estrito | Pronto |
@@ -117,11 +137,16 @@ pesquisa que orientou a implementação em
 | RBAC, rate limit e rotação de identidade | Pronto |
 | PNG/JPEG/BMP/WebP/JSON/NPY em inferência remota | Pronto |
 | Visão de frota e descoberta mDNS opcional | Pronto; mDNS não autentica |
+| Tags e seletores determinísticos de frota | Pronto |
+| Rollout em canário/lotes com gate e rollback | Pronto; simulação por padrão |
+| Ancoragem externa local e prova de extensão | Pronto; não é transparência pública |
+| Métricas JSON/Prometheus e sinais de drift | Pronto; drift é heurístico |
+| Mirai Fit Dynamic INT8 com gates | Pronto; benchmark no control plane |
 | Perfis CPU/CUDA/DirectML | Seleção pronta; CPU validado |
 | ARM64 Linux / ONNX Runtime CPU | Job nativo no CI |
 | Plugins de runtime e RISC-V | Experimental, não validado |
 
-O projeto está em estágio **alpha**. A v0.12 foi desenhada para laboratório,
+O projeto está em estágio **alpha**. A v0.13 foi desenhada para laboratório,
 localhost e redes privadas controladas; ela ainda não é um gateway para
 exposição direta à internet.
 
@@ -142,9 +167,15 @@ flowchart TD
     REPORT["Evidências<br/>JSON + Markdown"]
     INPUT["Secure Inputs<br/>imagem + JSON + NPY"]
     FLEET["Fleet<br/>inventário + retenção"]
+    ROLLOUT["Fleet Control<br/>tags + canário + rollback"]
+    OBS["Observability<br/>Prometheus + drift"]
+    ANCHOR["External Anchor<br/>prova de extensão"]
+    FIT["Mirai Fit<br/>INT8 + gates"]
     EDGE["Linux x86-64 · ARM64 · Docker"]
 
     CLI --> PILOT
+    CLI --> FIT
+    FIT --> PKG
     PILOT --> REG
     CLI --> PKG
     PKG --> LINK
@@ -156,6 +187,9 @@ flowchart TD
     INPUT --> API
     API --> LIFE
     FLEET --> API
+    ROLLOUT --> API
+    API --> OBS
+    API --> ANCHOR
     LIFE --> ORT
     ORT --> EDGE
     PILOT --> REPORT
@@ -171,9 +205,11 @@ O Agent usa armazenamento simples e inspecionável:
 | `models/` | Modelos ONNX validados e identificados pelo hash. |
 | `deployments.json` | Deployments, estados e seleção ativa. |
 | `audit.jsonl` + `audit.jsonl.head` | Cadeia verificável de eventos e checkpoint do head. |
+| `observability.json` | Contadores e amostras numéricas limitadas, sem entradas ou saídas brutas. |
 | `events.jsonl` | Histórico legado, preservado durante a migração. |
 
-Admissão, quarentena e integridade estão especificadas em
+Controle, observabilidade, ancoragem e Fit estão especificados em
+[Projeto Hikari v0.13](docs/hikari-v0.13.md), admissão e integridade em
 [Projeto Hikari v0.12](docs/hikari-v0.12.md), confiança, anexos e frota em
 [Projeto Hikari v0.11](docs/hikari-v0.11.md), o piloto em
 [Projeto Hikari v0.10](docs/hikari-v0.10.md), o
@@ -308,6 +344,61 @@ mirai pilot prune --keep 20 --apply
 Para assinatura automática, informe `report.signing_key` no projeto. A chave
 privada permanece apenas na máquina que executa o Pilot.
 
+## Operação de frota na v0.13
+
+Organize dispositivos com tags não secretas e selecione grupos sem manter
+listas manuais:
+
+```bash
+mirai device tag edge-01 --set env=prod --set region=br
+mirai device tag edge-02 --set env=prod --set region=br
+mirai fleet status --selector env=prod,region=br
+```
+
+Planeje uma entrega progressiva. Sem `--apply`, nenhum Agent é alterado:
+
+```bash
+mirai fleet rollout app-2.0.0.mirai \
+  --selector env=prod,region=br \
+  --canary 10 \
+  --batch-size 5 \
+  --max-failure-rate 0
+```
+
+Depois de revisar a evidência em `.mirai/rollouts/`, execute conscientemente:
+
+```bash
+mirai fleet rollout app-2.0.0.mirai \
+  --selector env=prod,region=br \
+  --canary 10 \
+  --batch-size 5 \
+  --max-failure-rate 0 \
+  --apply
+```
+
+Observe e ancore a mesma seleção:
+
+```bash
+mirai fleet observe --selector env=prod,region=br
+mirai fleet anchor --selector env=prod,region=br
+```
+
+Para gerar uma candidata INT8 antes do rollout:
+
+```bash
+mirai fit modelo.onnx \
+  --name app-int8 \
+  --package-version 1.0.0 \
+  --output app-int8-1.0.0.mirai \
+  --max-absolute-error 0.05 \
+  --min-speedup 1.0
+```
+
+O Fit grava `.fit.json` mesmo quando rejeita a candidata, mas só publica o
+`.mirai` quando qualidade e desempenho passam. O benchmark acontece no host
+do control plane; valide novamente no hardware de destino. Detalhes completos
+em [Projeto Hikari v0.13](docs/hikari-v0.13.md).
+
 ## Conecte um dispositivo na rede
 
 No dispositivo de destino, inicie o Agent em um endereço de rede:
@@ -356,6 +447,7 @@ pareamento com fingerprint.
 | `mirai info ARQUIVO` | Exibe contrato, hashes, tipos, shapes e nós. |
 | `mirai run ARQUIVO --input 5` | Executa inferência local. |
 | `mirai benchmark ARQUIVO` | Mede latência, P95 e vazão local. |
+| `mirai fit MODELO --name app-int8 --package-version 1.0.0 --output app.mirai` | Gera, testa e aprova uma variante Dynamic INT8. |
 | `mirai launch ARQUIVO --device edge --input 5` | Faz o fluxo rápido até a inferência. |
 | `mirai pilot init` | Cria um projeto declarativo de piloto. |
 | `mirai pilot run [ARQUIVO]` | Executa critérios, relatório e rollback. |
@@ -369,11 +461,16 @@ pareamento com fingerprint.
 | `mirai device pair edge ...` | Verifica e pareia um Agent HTTPS. |
 | `mirai device revoke edge` | Revoga o token e remove o cadastro. |
 | `mirai device clients/role edge ...` | Administra papéis dos clientes pareados. |
+| `mirai device tag edge --set env=prod` | Define/remove tags não secretas de seleção. |
 | `mirai device discover` | Encontra candidatos mDNS sem confiar neles. |
 | `mirai doctor --device edge` | Diagnostica canal, versões e runtime. |
 | `mirai deploy ARQUIVO --device edge --signature ARQUIVO.sig` | Envia artefato e assinatura destacada. |
 | `mirai cleanup --device edge --keep 5` | Simula/aplica retenção de deployments. |
-| `mirai fleet status` | Consulta a frota em paralelo, preservando hosts offline. |
+| `mirai fleet status --selector env=prod` | Consulta uma seleção, preservando hosts offline. |
+| `mirai fleet rollout ARQUIVO ...` | Planeja canário/lotes; `--apply` executa com gate e rollback. |
+| `mirai fleet observe` | Coleta métricas e sinais heurísticos de drift. |
+| `mirai fleet anchor` | Ancora heads no ledger externo local. |
+| `mirai audit anchor --device edge` | Ancora e verifica a extensão de um Agent. |
 | `mirai runtime list` | Lista ONNX e plugins experimentais descobertos. |
 | `mirai status --device edge` | Lista deployments e o modelo ativo. |
 | `mirai activate ID --device edge` | Ativa um deployment pronto. |
@@ -515,6 +612,14 @@ acesso pela rede:
   somente leitura e revalidados antes de ativação e inferência;
 - o log de auditoria encadeia cada evento ao anterior e mantém um checkpoint
   durável para detectar edição, reordenação, divergência e truncamento;
+- o control plane pode ancorar esse checkpoint fora do Agent e exige uma prova
+  contínua de extensão antes de aceitar um head novo;
+- rollout é somente plano por padrão, usa gates cumulativos e registra qualquer
+  falha ao restaurar ativações anteriores;
+- observabilidade persiste apenas contadores, latência e resumo numérico
+  limitado; entradas e resultados brutos não entram no arquivo de métricas;
+- variantes INT8 são criadas em staging, comparadas e publicadas
+  transacionalmente somente depois dos gates;
 - o servidor limita sockets lentos, fila, requisições simultâneas e trabalhos
   pesados, retornando erro em vez de criar trabalho ilimitado;
 - o hash interno protege o ONNX e o contrato declarado é comparado ao runtime;
@@ -534,10 +639,13 @@ acesso pela rede:
   produção. Use somente localhost ou rede privada com firewall.
 - A quarentena estrutural reduz risco, mas não é sandbox de processo, cgroup,
   seccomp, antivírus nem prova de que um ONNX desconhecido é benigno.
-- O checkpoint detecta corrupção acidental e adulteração local comum. Um
-  invasor com controle administrativo sobre o dispositivo pode reescrever o
-  log e o checkpoint; resistência a esse cenário exige ancorar o head fora do
-  Agent.
+- A âncora padrão detecta divergência entre Agent e control plane. Ela continua
+  local: um invasor que controle administrativamente os dois sistemas pode
+  reescrever ambos; esse cenário exige transparência ou custódia independente.
+- Drift compara janelas de médias. Ele não mede acurácia nem comprova mudança
+  conceitual nos dados.
+- O Fit v1 mede a candidata no control plane. Aprovação não substitui um
+  conjunto representativo nem benchmark no hardware de destino.
 - DSSE prova posse da chave configurada, não a identidade humana por trás
   dela. Distribuição, revogação e guarda das chaves continuam sendo tarefas do
   operador.
@@ -568,11 +676,14 @@ diretamente à internet.
 - [x] **v0.12 — Mirai Shield:** admissão assinada, quarentena ONNX, JSON
   estrito, instalação atômica, revalidação em uso, auditoria encadeada,
   limites de recursos e gates de qualidade.
+- [x] **v0.13 — Operação verificável:** tags e seletores, rollout progressivo,
+  ancoragem externa local, Prometheus/drift e Mirai Fit Dynamic INT8.
 
 ### Próximo
 
 - [ ] mTLS e rotação automatizada, com recuperação documentada.
-- [ ] Ancoragem externa do head de auditoria e política de revogação de chaves.
+- [ ] Serviço de transparência independente para âncoras e política distribuída
+  de revogação de chaves.
 - [ ] Isolamento do runtime em processo dedicado com limites do sistema
   operacional e reinício supervisionado.
 - [ ] Dashboard web local sobre a API de frota.
@@ -598,7 +709,7 @@ python -m coverage run -m pytest
 python -m coverage report
 ```
 
-O CI executa **1.239 testes** em Python 3.10, 3.11, 3.12 e 3.13 no Linux
+O CI executa **1.371 testes** em Python 3.10, 3.11, 3.12 e 3.13 no Linux
 x86-64, repete a suíte em Linux ARM64 nativo e exige no mínimo 75% de cobertura
 de branches. Actions de terceiros são fixadas por SHA completo e o Dependabot
 acompanha dependências Python e workflows. Consulte
@@ -625,6 +736,7 @@ Documentação dos marcos:
 - [v0.10 — Mirai Pilot](docs/hikari-v0.10.md)
 - [v0.11 — Trust, Fleet e Secure Inputs](docs/hikari-v0.11.md)
 - [v0.12 — Mirai Shield](docs/hikari-v0.12.md)
+- [v0.13 — Operação verificável em escala](docs/hikari-v0.13.md)
 - [Modelo de ameaças](docs/threat-model.md)
 - [Pesquisa e decisões do Mirai Shield](docs/research/0001-mirai-shield.md)
 - [Changelog completo](CHANGELOG.md)

@@ -5,6 +5,77 @@ Todas as mudanças relevantes do MiraiOS serão documentadas neste arquivo.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e
 o projeto utiliza [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.13.0] - 2026-08-05
+
+### Adicionado
+
+- tags normalizadas no registro de dispositivos e seletores conjuntivos para
+  operar subconjuntos da frota sem listas manuais;
+- rollout determinístico em canário e lotes, com limite de paralelismo, gate
+  cumulativo de falhas, interrupção, evidência JSON e rollback global das
+  ativações concluídas;
+- simulação como padrão de `mirai fleet rollout`; mudanças reais exigem
+  `--apply` explícito;
+- ancoragem do head de auditoria em um ledger fora do Agent, com prova de
+  extensão que recusa regressão, truncamento e reescrita da cadeia conhecida;
+- identidade persistente também no Agent local, permitindo ancoragem e labels
+  estáveis antes de ativar HTTPS e pareamento;
+- comandos `mirai audit anchor` e `mirai fleet anchor`, com falhas parciais
+  preservadas por dispositivo;
+- métricas estruturadas em `/v1/metrics`, sinais de drift em `/v1/drift` e
+  exposição Prometheus em `/metrics` sob a política `viewer`;
+- contadores persistentes, erro de inferência, mediana/P95 e sinais
+  conservadores de mudança de média para latência e saída numérica;
+- `mirai fleet observe` para agregar observabilidade sem ocultar Agents
+  offline;
+- Mirai Fit v1, que gera uma variante ONNX Dynamic INT8 no control plane,
+  compara saídas, mede P95, aplica gates e publica `.mirai` somente quando a
+  variante é aprovada;
+- assinatura DSSE/Ed25519 opcional da variante aceita e relatório `.fit.json`
+  com hardware, qualidade, desempenho, política e limitações;
+- documentação operacional completa em `docs/hikari-v0.13.md`.
+
+### Segurança e confiabilidade
+
+- tags, seletores, labels Prometheus, políticas numéricas e checkpoints
+  externos possuem schemas, formatos e limites explícitos;
+- entradas e saídas brutas não são persistidas pela observabilidade; apenas
+  latência e uma média numérica limitada alimentam o sinal heurístico;
+- métricas de inferência são sincronizadas em lotes e no encerramento limpo,
+  evitando `fsync` no caminho crítico de cada requisição;
+- falha de persistência da telemetria degrada o indicador de observabilidade,
+  mas não transforma uma inferência já concluída em falha;
+- a prova de extensão é limitada a 10.000 registros por resposta para limitar
+  memória e tráfego;
+- publicação do Mirai Fit usa staging, substituição atômica e restauração dos
+  artefatos anteriores se uma etapa de commit falhar;
+- uma variante rejeitada nunca substitui o pacote conhecido como funcional e
+  uma assinatura antiga não permanece ao lado de um pacote novo sem assinatura;
+- rollout interrompido registra inclusive falhas de rollback, sem declarar
+  sucesso silenciosamente.
+
+### Qualidade
+
+- 1.371 testes pytest aprovados, incluindo 132 testes específicos da v0.13;
+- novos testes cobrem concorrência, falhas parciais, rollback, corrupção,
+  privacidade, limites, drift, assinatura e publicação transacional;
+- cobertura total de branches em 79%, acima do gate de 75%;
+- Ruff, mypy, Bandit e auditoria de dependências permanecem gates obrigatórios.
+
+### Compatibilidade e limites
+
+- Mirai Package permanece no formato v1 e registros de dispositivos v1–v3
+  continuam legíveis; o registro passa ao formato v4 para persistir tags;
+- a política de admissão continua `open` por padrão e o Hikari Link não muda;
+- drift é um sinal estatístico operacional, não prova de concept drift nem de
+  perda de acurácia;
+- o benchmark do Mirai Fit v1 acontece no host do control plane e exige dados
+  representativos e validação posterior no hardware de destino;
+- a âncora padrão está fora do Agent, mas ainda no control plane local; ela não
+  equivale a um serviço público de transparência independente;
+- o Agent continua recomendado somente para localhost e redes privadas
+  controladas.
+
 ## [0.12.0] - 2026-07-31
 
 ### Adicionado

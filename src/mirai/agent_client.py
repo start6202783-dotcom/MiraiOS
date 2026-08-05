@@ -276,6 +276,28 @@ def get_agent_info(device: Device) -> dict[str, Any]:
     return request_json(device, "/v1/info")
 
 
+def get_agent_metrics(device: Device) -> dict[str, Any]:
+    """Retorna métricas operacionais estruturadas do Agent."""
+    payload = request_json(device, "/v1/metrics")
+    if not isinstance(payload.get("counters"), dict) or not isinstance(
+        payload.get("deployments"), dict
+    ):
+        raise MiraiRuntimeError(
+            f"Agent '{device.name}' retornou métricas inválidas"
+        )
+    return payload
+
+
+def get_agent_drift(device: Device) -> dict[str, Any]:
+    """Retorna sinais heurísticos de drift sem entradas ou saídas brutas."""
+    payload = request_json(device, "/v1/drift")
+    if not isinstance(payload.get("deployments"), dict):
+        raise MiraiRuntimeError(
+            f"Agent '{device.name}' retornou sinais de drift inválidos"
+        )
+    return payload
+
+
 def get_agent_logs(device: Device, limit: int = 20) -> list[dict[str, Any]]:
     """Retorna os eventos mais recentes registrados pelo Agent."""
     query = urlencode({"limit": limit})
@@ -288,9 +310,23 @@ def get_agent_logs(device: Device, limit: int = 20) -> list[dict[str, Any]]:
     return events
 
 
-def get_agent_audit(device: Device) -> dict[str, Any]:
+def get_agent_audit(
+    device: Device,
+    *,
+    from_records: int | None = None,
+    from_head: str | None = None,
+) -> dict[str, Any]:
     """Verifica a cadeia local e devolve o head para ancoragem externa."""
-    payload = request_json(device, "/v1/audit")
+    if (from_records is None) != (from_head is None):
+        raise MiraiRuntimeError(
+            "from_records e from_head devem ser informados juntos"
+        )
+    path = "/v1/audit"
+    if from_records is not None and from_head is not None:
+        path += "?" + urlencode(
+            {"from_records": from_records, "from_head": from_head}
+        )
+    payload = request_json(device, path)
     if payload.get("valid") is not True or not isinstance(payload.get("head"), str):
         raise MiraiRuntimeError(
             f"Agent '{device.name}' retornou auditoria inválida"
