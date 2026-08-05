@@ -8,8 +8,8 @@ receber suporte.
 
 | Série | Correções de segurança |
 | --- | --- |
-| 0.12.x | Sim |
-| 0.11.x e anteriores | Não |
+| 0.13.x | Sim |
+| 0.12.x e anteriores | Não |
 
 ## Como relatar
 
@@ -36,11 +36,17 @@ pedindo um canal privado, sem incluir detalhes técnicos da vulnerabilidade.
 - bypass da política `signed`, trust store ou quarentena estrutural;
 - adulteração não detectada entre deploy, ativação e inferência;
 - divergência, truncamento ou edição não detectada da cadeia de auditoria.
+- bypass de seletor, gate ou rollback em rollout de frota;
+- aceitação de prova de extensão divergente ou adulteração não detectada do
+  ledger externo;
+- vazamento de entrada ou saída bruta por métricas, drift ou Prometheus;
+- publicação de variante rejeitada ou corrupção transacional no Mirai Fit.
 
 ## Limites conhecidos
 
 O Agent deve operar em localhost ou rede privada protegida por firewall. A
-v0.12 não oferece gateway público, autoridade certificadora, mTLS, antivírus,
-cofre de chaves, isolamento de processo ou ancoragem externa automática da
-auditoria. mDNS encontra candidatos, mas não autentica dispositivos. Consulte
+v0.13 não oferece gateway público, autoridade certificadora, mTLS, antivírus,
+cofre de chaves, isolamento de processo ou transparência pública da auditoria.
+A âncora padrão está no control plane local; drift é heurístico e o Fit mede no
+host que o executa. mDNS encontra candidatos, mas não autentica dispositivos. Consulte
 o [modelo de ameaças](docs/threat-model.md).

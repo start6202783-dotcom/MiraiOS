@@ -30,6 +30,7 @@ from .discovery import AgentAdvertiser
 from .errors import MiraiRuntimeError
 from .inspect import validate_model_with_report
 from .json_codec import strict_json_dumps, strict_json_loads
+from .observability import ObservabilityStore
 from .package import (
     MAX_MODEL_SIZE_BYTES,
     MAX_PACKAGE_SIZE_BYTES,
@@ -100,6 +101,9 @@ class AgentState:
         self.packages_dir = self.data_dir / "packages"
         self.legacy_events_path = self.data_dir / "events.jsonl"
         self.audit = AuditLog(self.data_dir / "audit.jsonl")
+        self.observability = ObservabilityStore(
+            self.data_dir / "observability.json"
+        )
         self.deployments_path = self.data_dir / "deployments.json"
         self._events_lock = threading.Lock()
         self._deployments_lock = threading.Lock()
@@ -523,6 +527,11 @@ class MiraiAgentServer(ThreadingHTTPServer):
                 server_side=True,
             )
 
+    def server_close(self) -> None:
+        """Persiste métricas pendentes antes de liberar o socket."""
+        self.state.observability.flush()
+        super().server_close()
+
     def get_request(self) -> tuple[socket.socket, tuple[str, int]]:
         request, client_address = super().get_request()
         request.settimeout(REQUEST_SOCKET_TIMEOUT_SECONDS)
@@ -609,6 +618,23 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
 
     def _send_error(self, status: HTTPStatus, message: str) -> None:
         self._send_json(status, {"error": message})
+
+    def _send_text(
+        self,
+        status: HTTPStatus,
+        payload: str,
+        *,
+        content_type: str,
+    ) -> None:
+        encoded_payload = payload.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(encoded_payload)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Mirai-Agent-Version", __version__)
+        self.end_headers()
+        self.wfile.write(encoded_payload)
 
     def _bearer_token(self) -> str | None:
         authorization = self.headers.get("Authorization", "")
@@ -701,6 +727,37 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if request_url.path in {"/v1/metrics", "/v1/drift"}:
+            snapshot = self.server.state.observability.snapshot()
+            metrics_payload = (
+                snapshot
+                if request_url.path == "/v1/metrics"
+                else {
+                    "version": snapshot["version"],
+                    "updated_at": snapshot["updated_at"],
+                    "deployments": {
+                        deployment_id: deployment["drift"]
+                        for deployment_id, deployment in snapshot[
+                            "deployments"
+                        ].items()
+                    },
+                }
+            )
+            self._send_json(HTTPStatus.OK, metrics_payload)
+            return
+
+        if request_url.path == "/metrics":
+            prometheus_payload = self.server.state.observability.prometheus(
+                agent_id=self.server.state.security.agent_id
+                or "unpaired-local"
+            )
+            self._send_text(
+                HTTPStatus.OK,
+                prometheus_payload,
+                content_type="text/plain; version=0.0.4; charset=utf-8",
+            )
+            return
+
         if request_url.path == "/v1/deployments":
             try:
                 status = self.server.state.deployment_status()
@@ -739,7 +796,29 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
 
         if request_url.path == "/v1/audit":
             try:
-                audit = self.server.state.audit.verify()
+                query = parse_qs(request_url.query, keep_blank_values=True)
+                if not query:
+                    audit = self.server.state.audit.verify()
+                else:
+                    if set(query) != {"from_records", "from_head"} or any(
+                        len(values) != 1 for values in query.values()
+                    ):
+                        raise AgentRequestError(
+                            HTTPStatus.BAD_REQUEST,
+                            "prova de auditoria exige from_records e "
+                            "from_head únicos",
+                        )
+                    try:
+                        from_records = int(query["from_records"][0])
+                    except ValueError as error:
+                        raise AgentRequestError(
+                            HTTPStatus.BAD_REQUEST,
+                            "from_records deve ser inteiro",
+                        ) from error
+                    audit = self.server.state.audit.extension(
+                        from_records,
+                        query["from_head"][0],
+                    )
                 legacy_records = (
                     len(
                         self.server.state.legacy_events_path.read_text(
@@ -749,6 +828,9 @@ class MiraiAgentHandler(BaseHTTPRequestHandler):
                     if self.server.state.legacy_events_path.exists()
                     else 0
                 )
+            except AgentRequestError as error:
+                self._send_error(error.status, str(error))
+                return
             except (OSError, MiraiRuntimeError) as error:
                 self._send_error(HTTPStatus.UNPROCESSABLE_ENTITY, str(error))
                 return
@@ -1358,6 +1440,9 @@ def receive_deployment(
                 installed_path.unlink(missing_ok=True)
             raise
         state.append_event({"type": "deployment", **deployment})
+        state.observability.record_deployment(
+            str(deployment["deployment_id"])
+        )
         return deployment
     finally:
         if temporary_path is not None:
@@ -1373,6 +1458,7 @@ def activate_deployment(
     """Ativa um modelo pronto e registra a transição de lifecycle."""
     deployment = state.activate_deployment(deployment_id)
     state.append_event({"type": "activation", **deployment})
+    state.observability.record_activation(str(deployment["deployment_id"]))
     return deployment
 
 
@@ -1455,6 +1541,10 @@ def receive_inference(
                 "error": str(error),
             }
         )
+        state.observability.record_inference(
+            str(deployment["deployment_id"]),
+            failed=True,
+        )
         raise
     total_ms = (perf_counter() - started_at) * 1000
     event = {
@@ -1466,6 +1556,11 @@ def receive_inference(
         "total_ms": total_ms,
     }
     state.append_event(event)
+    state.observability.record_inference(
+        str(deployment["deployment_id"]),
+        latency_ms=latency_ms,
+        result=result,
+    )
     return {
         **event,
         "result": result,

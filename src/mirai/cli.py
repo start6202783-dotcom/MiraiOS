@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -25,15 +26,30 @@ from .agent_client import (
     run_remote_model,
     set_agent_client_role,
 )
+from .anchors import DEFAULT_ANCHOR_PATH, anchor_device, anchor_fleet
 from .benchmark import (
     DEFAULT_BENCHMARK_RUNS,
     DEFAULT_WARMUP_RUNS,
     benchmark_model,
 )
-from .devices import add_device, get_device, load_devices, mirai_home, remove_device
+from .devices import (
+    add_device,
+    get_device,
+    load_devices,
+    mirai_home,
+    remove_device,
+    update_device_tags,
+)
 from .discovery import discover_agents
 from .errors import MiraiRuntimeError
-from .fleet import inspect_fleet
+from .fit import fit_model
+from .fleet import (
+    DEFAULT_ROLLOUT_DIRECTORY,
+    execute_rollout,
+    inspect_fleet,
+    observe_fleet,
+    select_devices,
+)
 from .history import (
     get_pilot_report,
     list_pilot_history,
@@ -93,6 +109,28 @@ def tcp_port(value: str) -> int:
     parsed_value = positive_int(value)
     if parsed_value > 65535:
         raise argparse.ArgumentTypeError("deve estar entre 1 e 65535")
+    return parsed_value
+
+
+def unit_interval(value: str) -> float:
+    """Converte um argumento em proporção finita entre zero e um."""
+    try:
+        parsed_value = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("deve ser um número") from error
+    if not math.isfinite(parsed_value) or not 0.0 <= parsed_value <= 1.0:
+        raise argparse.ArgumentTypeError("deve estar entre 0 e 1")
+    return parsed_value
+
+
+def non_negative_float(value: str) -> float:
+    """Converte um argumento em número finito não negativo."""
+    try:
+        parsed_value = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("deve ser um número") from error
+    if not math.isfinite(parsed_value) or parsed_value < 0:
+        raise argparse.ArgumentTypeError("deve ser finito e não negativo")
     return parsed_value
 
 
@@ -289,6 +327,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_input_arguments(benchmark_parser)
 
+    fit_parser = subparsers.add_parser(
+        "fit",
+        help="gera e aprova uma variante INT8 com benchmark e gate de qualidade",
+    )
+    fit_parser.add_argument("model_path", type=Path, metavar="MODELO_ONNX")
+    fit_parser.add_argument("--name", required=True, metavar="NOME")
+    fit_parser.add_argument(
+        "--package-version",
+        required=True,
+        metavar="SEMVER",
+    )
+    fit_parser.add_argument("--output", required=True, type=Path, metavar="PACOTE.mirai")
+    fit_parser.add_argument("--runs", type=positive_int, default=50)
+    fit_parser.add_argument("--warmup", type=non_negative_int, default=3)
+    fit_parser.add_argument(
+        "--max-absolute-error",
+        type=non_negative_float,
+        default=0.05,
+    )
+    fit_parser.add_argument(
+        "--min-speedup",
+        type=non_negative_float,
+        default=1.0,
+        help="speedup P95 mínimo; use 0 para avaliar sem gate de desempenho",
+    )
+    fit_parser.add_argument("--per-channel", action="store_true")
+    fit_parser.add_argument("--sign-key", type=Path, metavar="CHAVE_PRIVADA")
+    fit_parser.add_argument("--replace", action="store_true")
+    _add_input_arguments(fit_parser)
+
     launch_parser = subparsers.add_parser(
         "launch",
         help="valida, implanta, ativa e testa um modelo no dispositivo",
@@ -472,6 +540,25 @@ def build_parser() -> argparse.ArgumentParser:
     device_role_parser.add_argument("name", metavar="NOME")
     device_role_parser.add_argument("client_id", metavar="CLIENTE")
     device_role_parser.add_argument("role", choices=ACCESS_ROLES)
+    device_tag_parser = device_subparsers.add_parser(
+        "tag",
+        help="define ou remove tags usadas pelo control plane",
+    )
+    device_tag_parser.add_argument("name", metavar="NOME")
+    device_tag_parser.add_argument(
+        "--set",
+        dest="set_tags",
+        action="append",
+        default=[],
+        metavar="CHAVE=VALOR",
+    )
+    device_tag_parser.add_argument(
+        "--remove",
+        dest="remove_tags",
+        action="append",
+        default=[],
+        metavar="CHAVE",
+    )
     device_discover_parser = device_subparsers.add_parser(
         "discover",
         help="encontra candidatos mDNS sem confiar ou cadastrá-los",
@@ -514,7 +601,59 @@ def build_parser() -> argparse.ArgumentParser:
     fleet_subparsers = fleet_parser.add_subparsers(
         dest="fleet_command", metavar="AÇÃO", required=True
     )
-    fleet_subparsers.add_parser("status", help="mostra saúde, hardware e deployment ativo")
+    fleet_status_parser = fleet_subparsers.add_parser(
+        "status", help="mostra saúde, hardware e deployment ativo"
+    )
+    fleet_status_parser.add_argument("--selector", metavar="CHAVE=VALOR")
+    fleet_observe_parser = fleet_subparsers.add_parser(
+        "observe", help="coleta métricas e sinais heurísticos de drift"
+    )
+    fleet_observe_parser.add_argument("--selector", metavar="CHAVE=VALOR")
+    fleet_observe_parser.add_argument("--workers", type=positive_int, default=8)
+    fleet_anchor_parser = fleet_subparsers.add_parser(
+        "anchor", help="ancora externamente os heads da frota"
+    )
+    fleet_anchor_parser.add_argument("--selector", metavar="CHAVE=VALOR")
+    fleet_anchor_parser.add_argument("--workers", type=positive_int, default=4)
+    fleet_anchor_parser.add_argument(
+        "--ledger",
+        type=Path,
+        default=DEFAULT_ANCHOR_PATH,
+    )
+    fleet_rollout_parser = fleet_subparsers.add_parser(
+        "rollout", help="planeja ou executa um rollout canário com rollback"
+    )
+    fleet_rollout_parser.add_argument("artifact_path", type=Path, metavar="ARQUIVO")
+    fleet_rollout_parser.add_argument("--selector", metavar="CHAVE=VALOR")
+    fleet_rollout_parser.add_argument("--canary", type=positive_int, default=10)
+    fleet_rollout_parser.add_argument("--batch-size", type=positive_int, default=10)
+    fleet_rollout_parser.add_argument("--max-failure-rate", type=unit_interval, default=0.0)
+    fleet_rollout_parser.add_argument("--workers", type=positive_int, default=4)
+    fleet_rollout_parser.add_argument(
+        "--provider-profile", choices=tuple(PROVIDER_PROFILES), default="auto"
+    )
+    fleet_rollout_parser.add_argument("--signature", type=Path)
+    fleet_rollout_parser.add_argument(
+        "--report-directory", type=Path, default=DEFAULT_ROLLOUT_DIRECTORY
+    )
+    fleet_rollout_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="executa; sem esta opção apenas grava o plano",
+    )
+    _add_input_arguments(fleet_rollout_parser)
+
+    audit_parser = subparsers.add_parser(
+        "audit", help="verifica e ancora auditoria fora do dispositivo"
+    )
+    audit_subparsers = audit_parser.add_subparsers(
+        dest="audit_command", metavar="AÇÃO", required=True
+    )
+    audit_anchor_parser = audit_subparsers.add_parser(
+        "anchor", help="ancora o head de um dispositivo no control plane"
+    )
+    audit_anchor_parser.add_argument("--device", required=True, dest="device_name")
+    audit_anchor_parser.add_argument("--ledger", type=Path, default=DEFAULT_ANCHOR_PATH)
 
     runtime_parser = subparsers.add_parser("runtime", help="inspeciona backends de runtime")
     runtime_subparsers = runtime_parser.add_subparsers(
@@ -737,10 +876,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if args.artifact_path.suffix.lower() == MIRAI_EXTENSION
                 else "Modelo ONNX"
             )
-            print(
-                f"[MiraiOS] {artifact_type} válido: "
-                f"{args.artifact_path.name} ({size_kb:.2f} KB)"
-            )
+            print(f"[MiraiOS] {artifact_type} válido: {args.artifact_path.name} ({size_kb:.2f} KB)")
             return 0
 
         if args.command == "info":
@@ -750,40 +886,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "run":
             if args.device_name:
                 device = get_device(args.device_name)
-                model_name = (
-                    args.model_path.name if args.model_path is not None else None
-                )
-                print(
-                    f"[MiraiOS] Executando no dispositivo: {device.name}"
-                )
+                model_name = args.model_path.name if args.model_path is not None else None
+                print(f"[MiraiOS] Executando no dispositivo: {device.name}")
                 inference = run_remote_model(
                     device,
                     args.input_specs,
                     args.layout,
                     model_name,
                 )
-                print(
-                    "[MiraiOS] Deployment: "
-                    f"{inference['deployment_id']}"
-                )
-                print(
-                    "[MiraiOS] Resultado da inferência: "
-                    f"{inference['result']}"
-                )
-                print(
-                    "[MiraiOS] Latência remota: "
-                    f"{inference['latency_ms']:.2f} ms"
-                )
-                print(
-                    "[MiraiOS] Tempo total no Agent: "
-                    f"{inference['total_ms']:.2f} ms"
-                )
+                print(f"[MiraiOS] Deployment: {inference['deployment_id']}")
+                print(f"[MiraiOS] Resultado da inferência: {inference['result']}")
+                print(f"[MiraiOS] Latência remota: {inference['latency_ms']:.2f} ms")
+                print(f"[MiraiOS] Tempo total no Agent: {inference['total_ms']:.2f} ms")
                 return 0
 
             if args.model_path is None:
-                raise MiraiRuntimeError(
-                    "informe ARQUIVO para execução local ou use --device"
-                )
+                raise MiraiRuntimeError("informe ARQUIVO para execução local ou use --device")
             print(f"[MiraiOS] Carregando modelo: {args.model_path.name}")
             result, elapsed_ms = run_model(
                 args.model_path,
@@ -809,17 +927,40 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"[MiraiOS] Latência média: {stats.average_ms:.2f} ms")
             print(f"[MiraiOS] Mediana: {stats.median_ms:.2f} ms")
             print(f"[MiraiOS] P95: {stats.p95_ms:.2f} ms")
-            print(
-                "[MiraiOS] Inferências por segundo (IPS): "
-                f"{stats.inferences_per_second:.2f}"
+            print(f"[MiraiOS] Inferências por segundo (IPS): {stats.inferences_per_second:.2f}")
+            return 0
+
+        if args.command == "fit":
+            print(f"[MiraiOS] Fit: avaliando {args.model_path.name}...")
+            fit_outcome = fit_model(
+                args.model_path,
+                args.output,
+                name=args.name,
+                package_version=args.package_version,
+                input_specs=args.input_specs,
+                layout=args.layout,
+                runs=args.runs,
+                warmup_runs=args.warmup,
+                max_absolute_error=args.max_absolute_error,
+                min_speedup=args.min_speedup,
+                per_channel=args.per_channel,
+                signing_key_path=args.sign_key,
+                replace=args.replace,
             )
+            print(f"[MiraiOS] Evidência Fit: {fit_outcome.report_path}")
+            benchmark = fit_outcome.report["benchmark"]
+            quality = fit_outcome.report["quality"]
+            print(f"[MiraiOS] Speedup P95: {benchmark['p95_speedup']:.3f}x")
+            print(f"[MiraiOS] Erro absoluto máximo: {quality['max_absolute_error']:.8f}")
+            if not fit_outcome.accepted:
+                return print_error("variante rejeitada pelos gates; o pacote não foi publicado")
+            print(f"[MiraiOS] Variante aprovada: {fit_outcome.package_path}")
+            if fit_outcome.signature_path is not None:
+                print(f"[MiraiOS] Assinatura DSSE: {fit_outcome.signature_path}")
             return 0
 
         if args.command == "launch":
-            print(
-                f"[MiraiOS] Launch: {args.artifact_path.name} → "
-                f"{args.device_name}"
-            )
+            print(f"[MiraiOS] Launch: {args.artifact_path.name} → {args.device_name}")
             result = launch_artifact(
                 args.artifact_path,
                 args.device_name,
@@ -828,19 +969,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 run_inference=not args.no_run,
                 provider_profile=args.provider_profile,
             )
-            print(
-                "[MiraiOS] Deployment ativo: "
-                f"{result.deployment['deployment_id']}"
-            )
+            print(f"[MiraiOS] Deployment ativo: {result.deployment['deployment_id']}")
             if result.inference is not None:
-                print(
-                    "[MiraiOS] Resultado da inferência: "
-                    f"{result.inference['result']}"
-                )
-                print(
-                    "[MiraiOS] Latência remota: "
-                    f"{result.inference['latency_ms']:.2f} ms"
-                )
+                print(f"[MiraiOS] Resultado da inferência: {result.inference['result']}")
+                print(f"[MiraiOS] Latência remota: {result.inference['latency_ms']:.2f} ms")
             print("[MiraiOS] Launch concluído com sucesso.")
             return 0
 
@@ -869,9 +1001,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("[MiraiOS] Histórico de pilotos:")
                 for pilot_entry in pilot_entries:
                     signature_status = (
-                        "assinado"
-                        if Path(pilot_entry["signature"]).is_file()
-                        else "sem assinatura"
+                        "assinado" if Path(pilot_entry["signature"]).is_file() else "sem assinatura"
                     )
                     print(
                         f"- {pilot_entry['run_id']} | {pilot_entry['project']} | "
@@ -909,9 +1039,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if outcome.success:
                 print("[MiraiOS] Piloto aprovado.")
                 return 0
-            return print_error(
-                "piloto reprovado; consulte o relatório e o rollback"
-            )
+            return print_error("piloto reprovado; consulte o relatório e o rollback")
 
         if args.command == "device":
             if args.device_command == "add":
@@ -920,10 +1048,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.url,
                     replace=args.replace,
                 )
-                print(
-                    f"[MiraiOS] Dispositivo cadastrado: "
-                    f"{device.name} ({device.url})"
-                )
+                print(f"[MiraiOS] Dispositivo cadastrado: {device.name} ({device.url})")
                 return 0
 
             if args.device_command == "pair":
@@ -934,15 +1059,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.fingerprint,
                     replace=args.replace,
                 )
-                print(
-                    f"[MiraiOS] Dispositivo pareado: "
-                    f"{device.name} ({device.url})"
-                )
+                print(f"[MiraiOS] Dispositivo pareado: {device.name} ({device.url})")
                 print(f"[MiraiOS] Agent ID: {pairing['agent_id']}")
-                print(
-                    "[MiraiOS] Fingerprint TLS confirmado: "
-                    f"{pairing['fingerprint']}"
-                )
+                print(f"[MiraiOS] Fingerprint TLS confirmado: {pairing['fingerprint']}")
                 return 0
 
             if args.device_command == "list":
@@ -953,7 +1072,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("[MiraiOS] Dispositivos cadastrados:")
                 for device in devices.values():
                     mode = "pareado" if device.paired else "local"
-                    print(f"- {device.name}: {device.url} ({mode})")
+                    tags = f" | {', '.join(device.tags)}" if device.tags else ""
+                    print(f"- {device.name}: {device.url} ({mode}){tags}")
                 return 0
 
             if args.device_command == "info":
@@ -966,10 +1086,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     f"{info.get('system', 'desconhecido')} "
                     f"{info.get('release', '')}".rstrip()
                 )
-                print(
-                    "[MiraiOS] Arquitetura: "
-                    f"{info.get('machine', 'desconhecida')}"
-                )
+                print(f"[MiraiOS] Arquitetura: {info.get('machine', 'desconhecida')}")
                 device_providers = info.get("providers") or []
                 provider_text = ", ".join(device_providers) if device_providers else "nenhum"
                 print(f"[MiraiOS] Providers: {provider_text}")
@@ -984,10 +1101,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 device = get_device(args.name)
                 revoked = revoke_remote_device(device)
                 remove_device(args.name)
-                print(
-                    f"[MiraiOS] Credenciais revogadas: "
-                    f"{device.name} ({revoked['client_id']})"
-                )
+                print(f"[MiraiOS] Credenciais revogadas: {device.name} ({revoked['client_id']})")
                 return 0
 
             if args.device_command == "clients":
@@ -1011,9 +1125,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.client_id,
                     args.role,
                 )
-                print(
-                    f"[MiraiOS] Papel atualizado: {client['client_id']} → {client['role']}"
+                print(f"[MiraiOS] Papel atualizado: {client['client_id']} → {client['role']}")
+                return 0
+
+            if args.device_command == "tag":
+                device = update_device_tags(
+                    args.name,
+                    set_tags=args.set_tags,
+                    remove_keys=args.remove_tags,
                 )
+                tags = ", ".join(device.tags) if device.tags else "nenhuma"
+                print(f"[MiraiOS] Tags de {device.name}: {tags}")
                 return 0
 
             if args.device_command == "discover":
@@ -1031,20 +1153,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.command == "deploy":
             device = get_device(args.device_name)
-            print(
-                f"[MiraiOS] Enviando {args.artifact_path.name} "
-                f"para {device.name}..."
-            )
+            print(f"[MiraiOS] Enviando {args.artifact_path.name} para {device.name}...")
             deployment = deploy_model(
                 device,
                 args.artifact_path,
                 args.provider_profile,
                 args.signature,
             )
-            print(
-                "[MiraiOS] Deployment pronto: "
-                f"{deployment['deployment_id']}"
-            )
+            print(f"[MiraiOS] Deployment pronto: {deployment['deployment_id']}")
             print(f"[MiraiOS] SHA-256: {deployment['sha256']}")
             deployment_package = deployment.get("package")
             if isinstance(deployment_package, dict):
@@ -1076,9 +1192,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.command == "fleet" and args.fleet_command == "status":
-            results = inspect_fleet(load_devices())
+            selected = select_devices(load_devices(), args.selector)
+            results = inspect_fleet({device.name: device for device in selected})
             if not results:
-                print("[MiraiOS] Nenhum dispositivo cadastrado.")
+                print("[MiraiOS] Nenhum dispositivo corresponde ao seletor.")
                 return 0
             print("[MiraiOS] Visão da frota:")
             for item in results:
@@ -1094,12 +1211,98 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             return 0
 
+        if args.command == "fleet" and args.fleet_command == "observe":
+            selected = select_devices(load_devices(), args.selector)
+            results = observe_fleet(selected, workers=args.workers)
+            if not results:
+                print("[MiraiOS] Nenhum dispositivo corresponde ao seletor.")
+                return 0
+            print("[MiraiOS] Observabilidade da frota:")
+            for item in results:
+                if item["status"] == "offline":
+                    print(f"○ {item['name']} | offline | {item['error']}")
+                    continue
+                counters = item["metrics"].get("counters", {})
+                warnings = sum(
+                    signal.get("status") == "warning"
+                    for deployment in item["drift"].get("deployments", {}).values()
+                    for signal in (
+                        deployment.get("latency", {}),
+                        deployment.get("output", {}),
+                    )
+                )
+                print(
+                    f"● {item['name']} | "
+                    f"{counters.get('inferences_total', 0)} inferências | "
+                    f"{counters.get('inference_failures_total', 0)} falhas | "
+                    f"{warnings} alerta(s) de drift"
+                )
+            return 0
+
+        if args.command == "fleet" and args.fleet_command == "anchor":
+            selected = select_devices(load_devices(), args.selector)
+            results = anchor_fleet(
+                selected,
+                ledger_path=args.ledger,
+                workers=args.workers,
+            )
+            if not results:
+                print("[MiraiOS] Nenhum dispositivo corresponde ao seletor.")
+                return 0
+            failed = False
+            print(f"[MiraiOS] Ledger externo: {args.ledger}")
+            for item in results:
+                marker = "✓" if item["status"] != "failed" else "✗"
+                if item["status"] == "failed":
+                    failed = True
+                    print(f"{marker} {item['device']} | falha | {item['error']}")
+                else:
+                    print(
+                        f"{marker} {item['device']} | {item['status']} | "
+                        f"{item['records']} registro(s) | {item['head'][:12]}"
+                    )
+            return 1 if failed else 0
+
+        if args.command == "fleet" and args.fleet_command == "rollout":
+            report = execute_rollout(
+                args.artifact_path,
+                load_devices(),
+                selector=args.selector,
+                canary_percent=args.canary,
+                batch_size=args.batch_size,
+                max_failure_rate=args.max_failure_rate,
+                workers=args.workers,
+                input_specs=args.input_specs,
+                layout=args.layout,
+                provider_profile=args.provider_profile,
+                signature_path=args.signature,
+                apply=args.apply,
+                report_directory=args.report_directory,
+            )
+            action = "Rollout" if args.apply else "Plano"
+            print(f"[MiraiOS] {action}: {report['run_id']}")
+            print(f"[MiraiOS] Status: {report['status']}")
+            print(f"[MiraiOS] Dispositivos: {sum(len(batch) for batch in report['batches'])}")
+            print(f"[MiraiOS] Evidência: {report['report_path']}")
+            if report["status"] in {"rolled_back", "rollback_failed"}:
+                return print_error("rollout interrompido; consulte a evidência")
+            if not args.apply:
+                print("[MiraiOS] Revise o plano e repita com --apply.")
+            return 0
+
+        if args.command == "audit" and args.audit_command == "anchor":
+            device = get_device(args.device_name)
+            result = anchor_device(device, ledger_path=args.ledger)
+            print(f"[MiraiOS] Auditoria de {device.name}: {result['status']}")
+            print(f"[MiraiOS] Registros: {result['records']}")
+            print(f"[MiraiOS] Head: {result['head']}")
+            print(f"[MiraiOS] Ledger externo: {args.ledger}")
+            return 0
+
         if args.command == "runtime" and args.runtime_command == "list":
             print("[MiraiOS] Backends de runtime:")
             for backend in list_runtime_backends():
-                print(
-                    f"- {backend['name']} | {backend['status']} | {backend['source']}"
-                )
+                print(f"- {backend['name']} | {backend['status']} | {backend['source']}")
             return 0
 
         if args.command == "activate":
@@ -1109,8 +1312,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.deployment_id,
             )
             print(
-                "[MiraiOS] Deployment ativo: "
-                f"{deployment['deployment_id']} ({deployment['model']})"
+                f"[MiraiOS] Deployment ativo: {deployment['deployment_id']} ({deployment['model']})"
             )
             return 0
 
@@ -1165,19 +1367,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             info = report["info"]
             deployments = report["deployments"]
             audit = report["audit"]
-            connection_mode = (
-                "HTTPS com fingerprint fixado"
-                if report["tls"]
-                else "HTTP local"
-            )
+            connection_mode = "HTTPS com fingerprint fixado" if report["tls"] else "HTTP local"
             authentication = (
-                "token pareado"
-                if report["authenticated"]
-                else "dispensada em localhost"
+                "token pareado" if report["authenticated"] else "dispensada em localhost"
             )
-            compatibility = (
-                "compatível" if report["compatible"] else "incompatível"
-            )
+            compatibility = "compatível" if report["compatible"] else "incompatível"
             doctor_providers = ", ".join(info.get("providers") or []) or "nenhum"
             print(f"[MiraiOS] Doctor: {device.name}")
             print(f"✓ Conexão: {health.get('status', 'desconhecida')}")
@@ -1190,10 +1384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"({compatibility})"
             )
             print(f"✓ Runtime: {doctor_providers}")
-            print(
-                "✓ Deployments: "
-                f"{len(deployments.get('deployments') or [])}"
-            )
+            print(f"✓ Deployments: {len(deployments.get('deployments') or [])}")
             active_id = deployments.get("active_deployment_id")
             print(f"✓ Ativo: {active_id or 'nenhum'}")
             print(
@@ -1202,9 +1393,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"head {str(audit.get('head', ''))[:12]}"
             )
             if not report["compatible"]:
-                raise MiraiRuntimeError(
-                    "as versões da CLI e do Agent não são compatíveis"
-                )
+                raise MiraiRuntimeError("as versões da CLI e do Agent não são compatíveis")
             return 0
 
         if args.command == "agent" and args.agent_command == "start":

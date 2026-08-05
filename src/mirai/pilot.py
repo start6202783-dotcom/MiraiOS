@@ -486,13 +486,19 @@ def launch_artifact(
     run_inference: bool = True,
     rollback_on_failure: bool = True,
     provider_profile: str = "auto",
+    signature_path: Path | None = None,
 ) -> LaunchResult:
     """Executa o fluxo rápido com rollback quando a validação final falha."""
     validate_artifact(artifact_path)
     device = get_device(device_name)
     doctor = _require_compatible_doctor(device)
     previous_active = doctor["deployments"].get("active_deployment_id")
-    deployment = deploy_model(device, artifact_path, provider_profile)
+    deployment = deploy_model(
+        device,
+        artifact_path,
+        provider_profile,
+        signature_path,
+    )
     deployed_id = str(deployment["deployment_id"])
     activate_deployment(device, deployed_id)
     inference: dict[str, Any] | None = None
@@ -518,6 +524,15 @@ def launch_artifact(
         inference=inference,
         previous_active_deployment_id=previous_active,
         rollback=rollback,
+    )
+
+
+def rollback_launch(device: Device, launch: LaunchResult) -> dict[str, Any]:
+    """Restaura com segurança a ativação anterior de um launch concluído."""
+    return _rollback_activation(
+        device,
+        launch.previous_active_deployment_id,
+        str(launch.deployment["deployment_id"]),
     )
 
 

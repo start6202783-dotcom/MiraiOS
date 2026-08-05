@@ -382,7 +382,10 @@ class AgentSecurity:
         self._clock = clock
         self.pairing_role = normalize_role(pairing_role)
         self._lock = threading.Lock()
-        self.identity = load_or_create_identity(data_dir) if secure else None
+        # A identidade é persistente mesmo em localhost. O certificado só é
+        # usado quando ``secure`` está ativo, mas o agent_id estável permite
+        # ancoragem de auditoria e métricas antes da migração para a rede.
+        self.identity = load_or_create_identity(data_dir)
         self._pairing_code: str | None = None
         self._pairing_code_hash: str | None = None
         self._pairing_expires_at: datetime | None = None

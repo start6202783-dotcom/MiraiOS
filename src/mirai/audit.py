@@ -17,6 +17,7 @@ AUDIT_GENESIS_HASH = "0" * 64
 AUDIT_HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MAX_AUDIT_RECORD_BYTES = 256 * 1024
 MAX_AUDIT_FILE_BYTES = 128 * 1024 * 1024
+MAX_AUDIT_EXTENSION_RECORDS = 10_000
 
 
 class AuditLog:
@@ -35,9 +36,7 @@ class AuditLog:
         try:
             info = path.stat()
         except OSError as error:
-            raise MiraiRuntimeError(
-                f"não foi possível inspecionar a auditoria: {error}"
-            ) from error
+            raise MiraiRuntimeError(f"não foi possível inspecionar a auditoria: {error}") from error
         return (
             info.st_dev,
             info.st_ino,
@@ -69,9 +68,7 @@ class AuditLog:
         records: list[dict[str, Any]] = []
         for index, line in enumerate(raw_lines, start=1):
             if not line or len(line) > MAX_AUDIT_RECORD_BYTES:
-                raise MiraiRuntimeError(
-                    f"registro de auditoria {index} vazio ou grande demais"
-                )
+                raise MiraiRuntimeError(f"registro de auditoria {index} vazio ou grande demais")
             value = strict_json_loads(line, label=f"registro de auditoria {index}")
             if not isinstance(value, dict):
                 raise MiraiRuntimeError(f"registro de auditoria {index} não é objeto")
@@ -210,9 +207,7 @@ class AuditLog:
             except OSError:
                 pass
         except OSError as error:
-            raise MiraiRuntimeError(
-                f"não foi possível registrar a auditoria: {error}"
-            ) from error
+            raise MiraiRuntimeError(f"não foi possível registrar a auditoria: {error}") from error
         next_status = {
             "valid": True,
             "version": AUDIT_VERSION,
@@ -230,3 +225,35 @@ class AuditLog:
         if self._cached_fingerprint != self._state_fingerprint():
             raise MiraiRuntimeError("auditoria foi alterada durante a leitura")
         return [dict(item["event"]) for item in reversed(records[-limit:])]
+
+    def extension(self, records: int, head: str) -> dict[str, Any]:
+        """Prova que o head atual estende um checkpoint ancorado externamente."""
+        if isinstance(records, bool) or not isinstance(records, int) or records < 0:
+            raise MiraiRuntimeError("quantidade ancorada de registros é inválida")
+        if not isinstance(head, str) or not AUDIT_HASH_PATTERN.fullmatch(head):
+            raise MiraiRuntimeError("head ancorado possui formato inválido")
+        status = self.verify()
+        current_records = int(status["records"])
+        if records > current_records:
+            raise MiraiRuntimeError("auditoria atual possui menos registros que a âncora")
+        if current_records - records > MAX_AUDIT_EXTENSION_RECORDS:
+            raise MiraiRuntimeError(
+                "prova de extensão excede 10000 registros; ancore a auditoria com mais frequência"
+            )
+        chain = self._records()
+        expected_head = (
+            AUDIT_GENESIS_HASH if records == 0 else str(chain[records - 1]["record_hash"])
+        )
+        if expected_head != head:
+            raise MiraiRuntimeError("auditoria atual não estende o head ancorado")
+        proof = [
+            {
+                "sequence": int(record["sequence"]),
+                "previous_hash": str(record["previous_hash"]),
+                "record_hash": str(record["record_hash"]),
+            }
+            for record in chain[records:]
+        ]
+        if self._cached_fingerprint != self._state_fingerprint():
+            raise MiraiRuntimeError("auditoria foi alterada durante a prova")
+        return {**status, "from_records": records, "from_head": head, "proof": proof}

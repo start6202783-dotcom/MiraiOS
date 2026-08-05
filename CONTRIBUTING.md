@@ -112,6 +112,6 @@ O Pull Request deve explicar:
 - limitações conhecidas;
 - comandos usados para validar.
 
-O CI executará 1.239 testes em Python 3.10, 3.11, 3.12 e 3.13, repetirá a
+O CI executará 1.371 testes em Python 3.10, 3.11, 3.12 e 3.13, repetirá a
 suíte em Linux ARM64 e bloqueará lint, tipos, segurança, dependências ou
 cobertura abaixo do piso. Aguarde todos os checks antes da revisão final.

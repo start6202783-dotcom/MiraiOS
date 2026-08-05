@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from mirai.devices import (
+    DEVICE_REGISTRY_VERSION,
     add_device,
     get_device,
     load_devices,
@@ -30,7 +31,10 @@ def test_device_registry_round_trip(tmp_path: Path) -> None:
     assert device.url == "http://127.0.0.1:8080"
     assert get_device("lab-local", path=registry) == device
     assert list(load_devices(registry)) == ["lab-local"]
-    assert json.loads(registry.read_text(encoding="utf-8"))["version"] == 3
+    assert (
+        json.loads(registry.read_text(encoding="utf-8"))["version"]
+        == DEVICE_REGISTRY_VERSION
+    )
     if os.name != "nt":
         assert stat.S_IMODE(registry.stat().st_mode) == 0o600
 
