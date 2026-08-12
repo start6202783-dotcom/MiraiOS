@@ -1,9 +1,10 @@
 include CHANGELOG.md
 include CONTRIBUTING.md
+include CODE_OF_CONDUCT.md
 include SECURITY.md
 include compose.yaml
 recursive-include examples *.json *.onnx
-recursive-include docs *.gif *.md *.png
+recursive-include docs *.gif *.jpg *.md *.png
 recursive-include docker *
 recursive-include scripts *.py
 recursive-include tests *.py

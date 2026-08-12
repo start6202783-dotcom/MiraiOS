@@ -1,0 +1,50 @@
+name: Propor uma melhoria
+description: Descreva um problema real e uma mudança compatível com o escopo.
+title: "[Proposta]: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A prioridade do MiraiOS é tornar IA local verificável e recuperável.
+        Propostas devem começar pelo problema e pela evidência, não pela quantidade de funcionalidades.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problema observado
+      description: Quem enfrenta o problema, em qual fluxo e com qual impacto?
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: Como isso é resolvido hoje?
+      description: Inclua comandos, contornos ou limitações existentes.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Resultado desejado
+      description: Descreva o comportamento e o critério de conclusão, sem exigir uma implementação específica.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidência e validação
+      description: Hardware, workload, piloto, usuário ou teste que comprovaria valor.
+  - type: textarea
+    id: risks
+    attributes:
+      label: Segurança, compatibilidade e privacidade
+      description: Quais formatos, dados, limites ou garantias podem ser afetados?
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Escopo
+      options:
+        - label: A proposta preserva a promessa local-first e não depende de expor o Agent diretamente à internet.
+          required: true
+        - label: Verifiquei o roadmap e as propostas existentes.
+          required: true

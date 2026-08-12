@@ -1,0 +1,14 @@
+default: true
+
+# Tabelas e URLs técnicas são mais legíveis sem quebra artificial.
+MD013: false
+
+# O README usa HTML somente para alinhamento e tamanho dos ativos de marca.
+MD033:
+  allowed_elements:
+    - br
+    - div
+    - img
+
+# O hero visual ocupa deliberadamente o lugar do H1 textual no README.
+MD041: false
