@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from statistics import mean, median
+from statistics import mean, median, pstdev
 from time import perf_counter
 from typing import Any
 
 from .errors import MiraiRuntimeError
+from .json_codec import canonical_json_bytes
 from .runtime import prepare_inference
 
 DEFAULT_BENCHMARK_RUNS = 50
@@ -28,6 +30,10 @@ class BenchmarkStats:
     min_ms: float
     max_ms: float
     inferences_per_second: float
+    p99_ms: float = 0.0
+    standard_deviation_ms: float = 0.0
+    coefficient_of_variation: float = 0.0
+    samples_sha256: str = ""
 
 
 def _percentile(values: list[float], percentile: float) -> float:
@@ -51,11 +57,13 @@ def summarize_latencies(
 
     total_ms = sum(latencies_ms)
     runs = len(latencies_ms)
+    average_ms = mean(latencies_ms)
+    standard_deviation_ms = pstdev(latencies_ms) if runs > 1 else 0.0
     return BenchmarkStats(
         runs=runs,
         warmup_runs=warmup_runs,
         total_ms=total_ms,
-        average_ms=mean(latencies_ms),
+        average_ms=average_ms,
         median_ms=median(latencies_ms),
         p95_ms=_percentile(latencies_ms, 0.95),
         min_ms=min(latencies_ms),
@@ -63,6 +71,14 @@ def summarize_latencies(
         inferences_per_second=(
             runs * 1000 / total_ms if total_ms > 0 else float("inf")
         ),
+        p99_ms=_percentile(latencies_ms, 0.99),
+        standard_deviation_ms=standard_deviation_ms,
+        coefficient_of_variation=(
+            standard_deviation_ms / average_ms if average_ms > 0 else 0.0
+        ),
+        samples_sha256=hashlib.sha256(
+            canonical_json_bytes(latencies_ms)
+        ).hexdigest(),
     )
 
 
@@ -94,7 +110,13 @@ def benchmark_model(
     warmup_runs: int = DEFAULT_WARMUP_RUNS,
     input_specs: list[str] | None = None,
     layout: str = "auto",
+    provider_profile: str = "auto",
 ) -> BenchmarkStats:
     """Prepara um modelo e coleta estatísticas de latência."""
-    session, input_feed = prepare_inference(model_path, input_specs, layout)
+    session, input_feed = prepare_inference(
+        model_path,
+        input_specs,
+        layout,
+        provider_profile=provider_profile,
+    )
     return benchmark_session(session, input_feed, runs, warmup_runs)
