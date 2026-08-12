@@ -2,6 +2,20 @@
 
 Obrigado por contribuir com o **MiraiOS** e o **Projeto Hikari**. Correções,
 testes, documentação e propostas para novos dispositivos são bem-vindos.
+Ao participar, siga o [Código de Conduta](CODE_OF_CONDUCT.md).
+
+## Encontre a conversa certa
+
+| Situação | Canal |
+| --- | --- |
+| Bug reproduzível | [Bug report](https://github.com/start6202783-dotcom/MiraiOS/issues/new?template=bug_report.yml) |
+| Melhoria com problema e critério claros | [Feature request](https://github.com/start6202783-dotcom/MiraiOS/issues/new?template=feature_request.yml) |
+| Dúvida ou ideia inicial | [Issue aberta](https://github.com/start6202783-dotcom/MiraiOS/issues/new) |
+| Vulnerabilidade | [Security Advisory privado](https://github.com/start6202783-dotcom/MiraiOS/security/advisories/new) |
+
+Antes de propor uma funcionalidade, explique o problema real e como o valor
+será validado. Hardware, workload, piloto ou caso negativo reproduzível são
+evidências melhores do que ampliar o escopo sem critério.
 
 ## Antes de abrir uma issue
 
@@ -111,6 +125,10 @@ O Pull Request deve explicar:
 - impacto para usuários e desenvolvedores;
 - limitações conhecidas;
 - comandos usados para validar.
+
+O repositório oferece um template com esses campos. PRs visuais ou editoriais
+também devem validar links e regenerar ativos quando modificarem o script em
+`scripts/render_readme_assets.py`.
 
 O CI executará 1.403 testes em Python 3.10, 3.11, 3.12 e 3.13, repetirá a
 suíte em Linux ARM64 e bloqueará lint, tipos, segurança, dependências ou

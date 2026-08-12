@@ -1,0 +1,63 @@
+name: Relatar um bug
+description: Informe um comportamento reproduzível do MiraiOS.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Obrigado por ajudar. Não inclua tokens, chaves, modelos privados ou dados sensíveis.
+        Vulnerabilidades devem seguir `SECURITY.md` e ser relatadas em privado.
+  - type: input
+    id: version
+    attributes:
+      label: Versão do MiraiOS
+      description: Saída de `mirai --version`.
+      placeholder: MiraiOS 0.14.0
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Ambiente
+      description: Sistema operacional, arquitetura, Python, runtime/provider e hardware relevante.
+      placeholder: Debian 12, ARM64, Python 3.12, ONNX Runtime CPU, Orange Pi...
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: O que aconteceu?
+      description: Descreva o comportamento observado e a mensagem de erro completa, sem segredos.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: O que você esperava?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reprodução mínima
+      description: Liste comandos, configuração mínima e entradas não sensíveis.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Contexto adicional
+      description: Logs sanitizados, hashes, screenshots ou modelo mínimo reproduzível.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmações
+      options:
+        - label: Procurei issues existentes para evitar duplicidade.
+          required: true
+        - label: Removi tokens, chaves, dados pessoais e artefatos confidenciais.
+          required: true
+        - label: Este relato não descreve uma vulnerabilidade de segurança.
+          required: true

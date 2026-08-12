@@ -66,7 +66,15 @@ o projeto utiliza [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 - assinatura de JSON identifica o tipo pelo campo `format`, com fallback
   compatível para `pilot-report`;
 - CLI e Agent passam à série `0.14`; Mirai Package e protocolo do Agent não
-  mudam.
+  mudam;
+- README reorganizado em torno do ciclo implantar, executar, observar e
+  recuperar, com apresentação mais curta, limites visíveis e navegação por
+  público;
+- identidade visual atualizada para a v0.14, com hero, ciclo operacional e GIF
+  da cadeia de evidência regeneráveis pelo repositório;
+- primeiros passos, referência da CLI e operação separados em guias próprios,
+  com central de documentação e templates estruturados de issue e pull
+  request.
 
 ### Qualidade
 
