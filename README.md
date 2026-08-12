@@ -16,7 +16,7 @@ em dispositivos Edge.**
 [Começar](#comece-em-3-minutos) ·
 [Mirai Pilot](#mirai-pilot) ·
 [Parear](#conecte-um-dispositivo-na-rede) ·
-[v0.13](#o-marco-da-v013) ·
+[v0.14](#o-marco-da-v014) ·
 [Arquitetura](#arquitetura) ·
 [CLI](#comandos) ·
 [Roadmap](#roadmap)
@@ -42,7 +42,29 @@ começar.
 > **Do modelo ao dispositivo físico em um único fluxo verificável, com
 > critérios e rollback.**
 
-## O marco da v0.13
+## O marco da v0.14
+
+A v0.14 cria uma cadeia local de evidência reproduzível:
+
+```text
+identificar → capturar → medir → verificar → agregar → compartilhar
+```
+
+| Pilar | Entrega |
+| --- | --- |
+| **Model Passport** | Identidade, contrato, precisão, origem declarada e limites do modelo. |
+| **Replay + Evidence** | Captura explícita de uma inferência e bundle portátil verificado por digest. |
+| **Arena Core** | Resultado single-stream padronizado, P99, estabilidade e hardware privacy-safe. |
+| **Compatibility** | Matriz local, Edge Score por SLA e prontidão sem autocertificação. |
+| **Failure Lab** | Corrupção e truncamento em cópias temporárias, repetibilidade e smoke benchmark. |
+
+A Arena desta versão é o **núcleo local e exportável**: não existe upload
+automático ou ranking público no pacote. O projeto também não autoemite o selo
+Mirai Certified Hardware; a matriz apenas identifica candidatos para uma
+revisão independente futura. Veja schemas, limites e exemplos em
+[Projeto Hikari v0.14](docs/hikari-v0.14.md).
+
+## A operação verificável da v0.13
 
 A v0.13 conecta as garantias das versões anteriores em um ciclo operacional:
 
@@ -79,7 +101,7 @@ silenciosamente à inferência.
 | **Fixe a identidade** | Pacote e modelo são instalados por conteúdo, somente leitura, e verificados novamente antes de ativar ou inferir. |
 | **Registre** | Cada evento entra em uma cadeia SHA-256 com sequência, hash anterior e checkpoint durável. |
 | **Limite** | Timeout, fila, concorrência de requisições e operações pesadas reduzem abuso de recursos. |
-| **Teste** | 1.371 testes, incluindo um corpus determinístico com 1.024 casos hostis e 132 cenários próprios da v0.13. |
+| **Teste** | 1.403 testes, incluindo corpus hostil e cenários próprios de evidência e compatibilidade da v0.14. |
 
 O desenho e as decisões estão em [Projeto Hikari v0.12](docs/hikari-v0.12.md),
 o modelo de ameaças em [docs/threat-model.md](docs/threat-model.md) e a
@@ -109,14 +131,21 @@ pesquisa que orientou a implementação em
 
 ## Status atual
 
-| Capacidade | v0.13 |
+| Capacidade | v0.14 |
 | --- | --- |
 | Validação estrutural com `onnx.checker` | Pronto |
 | Pacote `.mirai` determinístico com manifesto estrito | Pronto |
 | Verificação de hash e contrato contra o ONNX real | Pronto |
 | Pré-processamento declarativo de imagens | Pronto localmente |
 | Inferência local numérica, JSON e imagens | Pronto |
-| Benchmark com warm-up, mediana, P95 e IPS | Pronto |
+| Benchmark com warm-up, mediana, P95, P99, estabilidade e IPS | Pronto |
+| Model Passport determinístico e verificável | Pronto |
+| Replay explícito com anexos e comparação tolerante | Pronto; contém dados de entrada |
+| Evidence Bundle portátil, limitado e assinável | Pronto |
+| Arena Result padronizado e privacy-safe | Pronto localmente; sem serviço público |
+| Compatibility Matrix e Edge Score por SLA | Pronto localmente |
+| Failure Lab com injeção controlada em cópias | Pronto; não é sandbox ou fuzzer |
+| Mirai Certified Hardware | Não autoemitido; somente prontidão para revisão futura |
 | Deploy verificado e lifecycle `ready` / `active` | Pronto |
 | Inferência remota, eventos e métricas | Pronto |
 | Identidade TLS persistente e fingerprint SHA-256 | Pronto |
@@ -146,7 +175,7 @@ pesquisa que orientou a implementação em
 | ARM64 Linux / ONNX Runtime CPU | Job nativo no CI |
 | Plugins de runtime e RISC-V | Experimental, não validado |
 
-O projeto está em estágio **alpha**. A v0.13 foi desenhada para laboratório,
+O projeto está em estágio **alpha**. A v0.14 foi desenhada para laboratório,
 localhost e redes privadas controladas; ela ainda não é um gateway para
 exposição direta à internet.
 
@@ -171,10 +200,14 @@ flowchart TD
     OBS["Observability<br/>Prometheus + drift"]
     ANCHOR["External Anchor<br/>prova de extensão"]
     FIT["Mirai Fit<br/>INT8 + gates"]
+    EVIDENCE["Evidence Core<br/>Passport + Replay + Bundle"]
+    ARENA["Arena Core<br/>benchmark + matriz + score"]
     EDGE["Linux x86-64 · ARM64 · Docker"]
 
     CLI --> PILOT
     CLI --> FIT
+    CLI --> EVIDENCE
+    CLI --> ARENA
     FIT --> PKG
     PILOT --> REG
     CLI --> PKG
@@ -193,6 +226,8 @@ flowchart TD
     LIFE --> ORT
     ORT --> EDGE
     PILOT --> REPORT
+    EVIDENCE --> REPORT
+    ARENA --> REPORT
 ```
 
 O Agent usa armazenamento simples e inspecionável:
@@ -208,8 +243,9 @@ O Agent usa armazenamento simples e inspecionável:
 | `observability.json` | Contadores e amostras numéricas limitadas, sem entradas ou saídas brutas. |
 | `events.jsonl` | Histórico legado, preservado durante a migração. |
 
-Controle, observabilidade, ancoragem e Fit estão especificados em
-[Projeto Hikari v0.13](docs/hikari-v0.13.md), admissão e integridade em
+Evidência e compatibilidade estão especificadas em
+[Projeto Hikari v0.14](docs/hikari-v0.14.md), controle, observabilidade,
+ancoragem e Fit em [Projeto Hikari v0.13](docs/hikari-v0.13.md), admissão e integridade em
 [Projeto Hikari v0.12](docs/hikari-v0.12.md), confiança, anexos e frota em
 [Projeto Hikari v0.11](docs/hikari-v0.11.md), o piloto em
 [Projeto Hikari v0.10](docs/hikari-v0.10.md), o
@@ -344,6 +380,64 @@ mirai pilot prune --keep 20 --apply
 Para assinatura automática, informe `report.signing_key` no projeto. A chave
 privada permanece apenas na máquina que executa o Pilot.
 
+## Evidência e compatibilidade na v0.14
+
+Crie a identidade verificável do artefato e um caso reproduzível. Replay exige
+confirmação porque incorpora as entradas:
+
+```bash
+mirai passport create dummy-1.0.0.mirai \
+  --output model-passport.json \
+  --intended-use "teste local"
+
+mirai replay capture dummy-1.0.0.mirai \
+  --output exemplo.mirai-replay \
+  --capture-inputs \
+  --input 5.0
+
+mirai replay run exemplo.mirai-replay dummy-1.0.0.mirai
+```
+
+Meça o mesmo workload no hardware real, calcule conformidade com um SLA e
+adicione o resultado à matriz local:
+
+```bash
+mirai arena run dummy-1.0.0.mirai \
+  --output benchmark.json \
+  --category sbc-arm \
+  --provider-profile cpu \
+  --runs 100 \
+  --warmup 5
+
+mirai arena score benchmark.json \
+  --target-p95-ms 20 \
+  --target-ips 50
+
+mirai compatibility add benchmark.json
+mirai compatibility show
+```
+
+Por fim, reúna relatório, passaporte e resultados sem copiar o modelo:
+
+```bash
+mirai failure-lab dummy-1.0.0.mirai --output failure-lab.json
+
+mirai evidence create .mirai/reports/RELATORIO.json \
+  --output entrega.mirai-evidence \
+  --artifact dummy-1.0.0.mirai \
+  --passport model-passport.json \
+  --include benchmark.json \
+  --include failure-lab.json
+
+mirai evidence verify entrega.mirai-evidence \
+  --artifact dummy-1.0.0.mirai
+```
+
+Hostname, rede e números de série não entram na identidade de hardware. A
+assinatura opcional prova a chave e os bytes, não a veracidade física da
+placa. O contrato completo está em
+[Projeto Hikari v0.14](docs/hikari-v0.14.md).
+
 ## Operação de frota na v0.13
 
 Organize dispositivos com tags não secretas e selecione grupos sem manter
@@ -446,14 +540,21 @@ pareamento com fingerprint.
 | `mirai validate ARQUIVO` | Valida integralmente um ONNX ou `.mirai`. |
 | `mirai info ARQUIVO` | Exibe contrato, hashes, tipos, shapes e nós. |
 | `mirai run ARQUIVO --input 5` | Executa inferência local. |
-| `mirai benchmark ARQUIVO` | Mede latência, P95 e vazão local. |
+| `mirai benchmark ARQUIVO` | Mede latência, P95, P99, estabilidade e vazão local. |
+| `mirai hardware` | Mostra identidade de hardware sem identificadores pessoais. |
+| `mirai passport create/verify/show` | Cria e confere o Model Passport. |
+| `mirai replay capture/run` | Captura explicitamente e reproduz uma inferência. |
+| `mirai evidence create/verify` | Agrupa e verifica evidências portáteis. |
+| `mirai arena run/verify/score` | Mede, valida e calcula conformidade com SLA. |
+| `mirai compatibility add/show` | Mantém a matriz local de hardware/workload. |
+| `mirai failure-lab ARQUIVO` | Testa falhas em cópias temporárias. |
 | `mirai fit MODELO --name app-int8 --package-version 1.0.0 --output app.mirai` | Gera, testa e aprova uma variante Dynamic INT8. |
 | `mirai launch ARQUIVO --device edge --input 5` | Faz o fluxo rápido até a inferência. |
 | `mirai pilot init` | Cria um projeto declarativo de piloto. |
 | `mirai pilot run [ARQUIVO]` | Executa critérios, relatório e rollback. |
 | `mirai pilot history/prune` | Consulta evidências e aplica retenção confirmada. |
 | `mirai key generate release` | Cria um par Ed25519 local. |
-| `mirai sign/verify ARQUIVO ...` | Assina ou verifica pacote/relatório com DSSE. |
+| `mirai sign/verify ARQUIVO ...` | Assina ou verifica um artefato Mirai com DSSE. |
 | `mirai agent start` | Inicia o Agent local. |
 | `mirai agent start --host 0.0.0.0` | Inicia um Agent HTTPS pareável. |
 | `mirai agent start --admission signed --trust-key release.pub` | Exige pacote assinado por chave confiável. |
@@ -547,7 +648,8 @@ mirai benchmark modelo-1.0.0.mirai --runs 100 --warmup 5
 ```
 
 O carregamento do modelo não entra na medição. O relatório inclui tempo total,
-latência média, mediana, percentil 95 e inferências por segundo.
+latência média, mediana, P95, P99, desvio-padrão, coeficiente de variação,
+digest das amostras e inferências por segundo.
 
 No Mirai Pilot, as medições acontecem no Agent e podem ser comparadas a
 `max_p95_ms` e `min_ips`. O tempo de rede não entra na latência do modelo.
@@ -620,6 +722,10 @@ acesso pela rede:
   limitado; entradas e resultados brutos não entram no arquivo de métricas;
 - variantes INT8 são criadas em staging, comparadas e publicadas
   transacionalmente somente depois dos gates;
+- Passport, Arena, Matrix, Failure Lab, Replay e Evidence possuem schemas,
+  limites, digests internos e tipos próprios de assinatura;
+- Replay exige captura explícita; Arena não inclui valores, caminhos,
+  hostname, rede ou números de série;
 - o servidor limita sockets lentos, fila, requisições simultâneas e trabalhos
   pesados, retornando erro em vez de criar trabalho ilimitado;
 - o hash interno protege o ONNX e o contrato declarado é comparado ao runtime;
@@ -649,6 +755,10 @@ acesso pela rede:
 - DSSE prova posse da chave configurada, não a identidade humana por trás
   dela. Distribuição, revogação e guarda das chaves continuam sendo tarefas do
   operador.
+- Replay pode conter dados brutos sensíveis e exige proteção equivalente à
+  fixture original; digest de literal curto não é anonimização.
+- Arena Result e Compatibility Matrix são evidências locais. Não existe
+  ranking público, verificação física ou certificação automática na v0.14.
 - Ainda não há mTLS, autoridade certificadora, transparência pública,
   isolamento por processo ou cofre de chaves.
 
@@ -678,6 +788,9 @@ diretamente à internet.
   limites de recursos e gates de qualidade.
 - [x] **v0.13 — Operação verificável:** tags e seletores, rollout progressivo,
   ancoragem externa local, Prometheus/drift e Mirai Fit Dynamic INT8.
+- [x] **v0.14 — Evidência e compatibilidade:** Model Passport, Replay,
+  Evidence Bundle, Arena Result, Edge Score, Compatibility Matrix e Failure
+  Lab local.
 
 ### Próximo
 
@@ -690,6 +803,10 @@ diretamente à internet.
 - [ ] Testes físicos publicados para NVIDIA CUDA e Windows DirectML/WinML.
 - [ ] Assinatura e distribuição de plugins de runtime.
 - [ ] Compatibilidade RISC-V somente após runner e runtime reais.
+- [ ] Serviço público opt-in da Benchmark Arena com moderação, transparência e
+  política de privacidade.
+- [ ] Programa independente de Mirai Certified Hardware com fixtures,
+  governança, revisão e revogação publicadas.
 
 O roadmap prioriza um protocolo seguro e útil antes de ampliar a quantidade de
 hardwares suportados.
@@ -709,7 +826,7 @@ python -m coverage run -m pytest
 python -m coverage report
 ```
 
-O CI executa **1.371 testes** em Python 3.10, 3.11, 3.12 e 3.13 no Linux
+O CI executa **1.403 testes** em Python 3.10, 3.11, 3.12 e 3.13 no Linux
 x86-64, repete a suíte em Linux ARM64 nativo e exige no mínimo 75% de cobertura
 de branches. Actions de terceiros são fixadas por SHA completo e o Dependabot
 acompanha dependências Python e workflows. Consulte
@@ -737,8 +854,10 @@ Documentação dos marcos:
 - [v0.11 — Trust, Fleet e Secure Inputs](docs/hikari-v0.11.md)
 - [v0.12 — Mirai Shield](docs/hikari-v0.12.md)
 - [v0.13 — Operação verificável em escala](docs/hikari-v0.13.md)
+- [v0.14 — Evidência, reprodução e compatibilidade](docs/hikari-v0.14.md)
 - [Modelo de ameaças](docs/threat-model.md)
 - [Pesquisa e decisões do Mirai Shield](docs/research/0001-mirai-shield.md)
+- [Pesquisa de evidência e benchmark](docs/research/0002-evidence-benchmark.md)
 - [Changelog completo](CHANGELOG.md)
 - [Política de segurança](SECURITY.md)
 

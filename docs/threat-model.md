@@ -1,8 +1,8 @@
-# Modelo de ameaças do MiraiOS v0.13
+# Modelo de ameaças do MiraiOS v0.14
 
 ## Escopo
 
-Este documento descreve o que a v0.13 protege, o que somente detecta e o que
+Este documento descreve o que a v0.14 protege, o que somente detecta e o que
 permanece fora do escopo. O cenário recomendado é um Agent em localhost ou em
 rede privada controlada, operado por pessoas que conseguem confirmar um
 fingerprint e distribuir uma chave pública por canal confiável.
@@ -16,6 +16,7 @@ fingerprint e distribuir uma chave pública por canal confiável.
 - registros de clientes, lifecycle e auditoria;
 - ledger de âncoras, planos de rollout e relatórios do Mirai Fit;
 - métricas operacionais sem entradas ou saídas brutas;
+- Replay, Passport, Evidence Bundle, resultados da Arena e matriz local;
 - disponibilidade de CPU, memória e disco do dispositivo.
 
 ## Fronteiras
@@ -32,6 +33,8 @@ flowchart LR
     C --> X[(Ledger externo local)]
     L -->|prova de extensão| X
     A --> M[(Métricas limitadas)]
+    C --> E[(Evidence + Replay)]
+    C --> B[(Arena + Matrix)]
 ```
 
 | Fronteira | Dados não confiáveis | Controle principal |
@@ -45,6 +48,9 @@ flowchart LR
 | Âncora externa | regressão ou cadeia reescrita | checkpoint conhecido e prova contínua de extensão |
 | Observabilidade | cardinalidade, dados privados e disco | labels controlados, resumos limitados e flush em lote |
 | Fit | variante incorreta ou publicação parcial | comparação, gates, staging e restauração transacional |
+| Evidência | campo extra, digest ou conteúdo adulterado | schema estrito, limites, ID recalculado e DSSE opcional |
+| Replay | captura involuntária ou caminho local | consentimento explícito, referências internas e arquivo `0600` |
+| Arena | vazamento e claim falso de hardware | perfil privacy-safe e limites; assinatura não valida o físico |
 
 ## Ameaças tratadas
 
@@ -63,6 +69,9 @@ flowchart LR
 - rollout acidental sem confirmação e propagação após exceder o gate de falhas;
 - persistência de entradas, imagens ou resultados completos na telemetria;
 - publicação de variante INT8 reprovada ou substituição parcial de artefatos;
+- adulteração de Passport, Replay, Evidence Bundle, Arena, Matrix ou Failure
+  Lab sem atualizar seus digests e identificadores;
+- captura implícita de entradas pelo Replay;
 - rajada de requisições ou operações pesadas acima dos limites locais.
 
 ## Ameaças parcialmente tratadas
@@ -77,8 +86,10 @@ flowchart LR
 | Compromisso simultâneo | âncora fora do Agent | controle do Agent e do control plane permite reescrever os dois ledgers |
 | Drift de dados | mudança de média em duas janelas | não mede acurácia, rótulos ou mudança conceitual |
 | Otimização por hardware | hardware do benchmark registrado | Fit v1 mede no control plane, não no destino |
+| Claims de benchmark | assinatura e identidade privacy-safe | operador ainda pode informar categoria ou hardware falso |
+| Reprodução | artefato e entradas ligados por digest | tensores grandes usam saída normalizada limitada |
 
-## Fora do escopo da v0.13
+## Fora do escopo da v0.14
 
 - internet pública e ambiente multi-tenant hostil;
 - isolamento forte entre modelos;
@@ -90,7 +101,9 @@ flowchart LR
 - serviço público de transparência ou testemunhas independentes da âncora;
 - garantia estatística de concept drift ou monitoramento de acurácia;
 - calibração INT8 estática, compilação para NPU ou certificação da variante;
-- certificação de segurança ou prova formal.
+- certificação de segurança ou prova formal;
+- ranking público, moderação de submissões ou verificação física de hardware;
+- autocertificação ou programa Mirai Certified Hardware nesta versão.
 
 ## Regras operacionais
 
@@ -103,6 +116,9 @@ flowchart LR
    fronteira administrativa independente quando a ameaça exigir.
 7. Atualize dependências após os gates e testes do projeto.
 8. Trate CUDA, DirectML, plugins e RISC-V como experimentais até validação real.
+9. Proteja `.mirai-replay` como dado de teste sensível e revise o conteúdo
+   antes de compartilhar.
+10. Não trate assinatura, Edge Score ou prontidão da Matrix como certificação.
 
 ## Próximas reduções de risco
 

@@ -8,8 +8,8 @@ receber suporte.
 
 | Série | Correções de segurança |
 | --- | --- |
-| 0.13.x | Sim |
-| 0.12.x e anteriores | Não |
+| 0.14.x | Sim |
+| 0.13.x e anteriores | Não |
 
 ## Como relatar
 
@@ -32,21 +32,27 @@ pedindo um canal privado, sem incluir detalhes técnicos da vulnerabilidade.
 - execução de código por pacote `.mirai`, NPY, imagem ou plugin;
 - verificação incorreta de hash ou assinatura;
 - exposição de tokens, chaves privadas ou entradas ocultadas de relatório;
-- remoção do deployment ativo ou de arquivos fora da política de retenção.
+- remoção do deployment ativo ou de arquivos fora da política de retenção;
 - bypass da política `signed`, trust store ou quarentena estrutural;
 - adulteração não detectada entre deploy, ativação e inferência;
-- divergência, truncamento ou edição não detectada da cadeia de auditoria.
+- divergência, truncamento ou edição não detectada da cadeia de auditoria;
 - bypass de seletor, gate ou rollback em rollout de frota;
 - aceitação de prova de extensão divergente ou adulteração não detectada do
   ledger externo;
 - vazamento de entrada ou saída bruta por métricas, drift ou Prometheus;
-- publicação de variante rejeitada ou corrupção transacional no Mirai Fit.
+- publicação de variante rejeitada ou corrupção transacional no Mirai Fit;
+- captura de Replay sem consentimento ou inclusão inesperada de caminho local;
+- adulteração não detectada de Passport, Replay, Evidence Bundle, Arena
+  Result, Compatibility Matrix ou Failure Lab;
+- coleta de hostname, rede ou número de série pela identidade de hardware.
 
 ## Limites conhecidos
 
 O Agent deve operar em localhost ou rede privada protegida por firewall. A
-v0.13 não oferece gateway público, autoridade certificadora, mTLS, antivírus,
+v0.14 não oferece gateway público, autoridade certificadora, mTLS, antivírus,
 cofre de chaves, isolamento de processo ou transparência pública da auditoria.
 A âncora padrão está no control plane local; drift é heurístico e o Fit mede no
-host que o executa. mDNS encontra candidatos, mas não autentica dispositivos. Consulte
-o [modelo de ameaças](docs/threat-model.md).
+host que o executa. Replay pode conter entradas sensíveis; Arena e Matrix não
+verificam fisicamente o hardware nem certificam dispositivos. mDNS encontra
+candidatos, mas não autentica dispositivos. Consulte o
+[modelo de ameaças](docs/threat-model.md).

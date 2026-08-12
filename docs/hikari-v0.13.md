@@ -16,8 +16,9 @@ Os quatro pilares deste marco são:
 4. **Mirai Fit v1:** variante INT8 gerada, comparada e aprovada no control
    plane antes de ser publicada.
 
-O Creator Node, o Mirai Benchmark Arena, uma distribuição Linux própria e
-produtos voltados ao público permanecem fora deste repositório e deste marco.
+O Creator Node, uma distribuição Linux própria e produtos voltados ao público
+permanecem fora deste marco. O núcleo local da Mirai Benchmark Arena foi
+introduzido posteriormente na v0.14; ele não faz parte dos contratos da v0.13.
 
 ## Fluxo operacional
 

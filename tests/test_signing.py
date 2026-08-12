@@ -86,6 +86,33 @@ def test_sign_and_verify_mirai_package(dummy_package: Path, tmp_path: Path) -> N
     assert verified["payload"]["kind"] == "mirai-package"
 
 
+@pytest.mark.parametrize(
+    ("name", "content", "kind"),
+    [
+        ("passport.json", '{"format":"mirai.model-passport"}\n', "model-passport"),
+        ("arena.json", '{"format":"mirai.arena-result"}\n', "arena-result"),
+        ("matrix.json", '{"format":"mirai.compatibility-matrix"}\n', "compatibility-matrix"),
+        ("lab.json", '{"format":"mirai.failure-lab"}\n', "failure-lab-report"),
+        ("run.mirai-replay", "{}\n", "replay-bundle"),
+        ("proof.mirai-evidence", "{}\n", "evidence-bundle"),
+    ],
+)
+def test_signing_uses_typed_v14_artifact_kinds(
+    tmp_path: Path,
+    name: str,
+    content: str,
+    kind: str,
+) -> None:
+    private, public = _keys(tmp_path)
+    artifact = tmp_path / name
+    artifact.write_text(content, encoding="utf-8")
+
+    signed = sign_artifact(artifact, private)
+    verified = verify_artifact(artifact, signed["signature"], public)
+
+    assert verified["payload"]["kind"] == kind
+
+
 def test_verify_rejects_modified_artifact(tmp_path: Path) -> None:
     private, public = _keys(tmp_path)
     report = tmp_path / "pilot.json"

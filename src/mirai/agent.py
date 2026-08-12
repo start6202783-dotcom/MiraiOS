@@ -61,6 +61,7 @@ REQUEST_SOCKET_TIMEOUT_SECONDS = 15.0
 DEPLOYMENT_REGISTRY_VERSION = 1
 SAFE_MODEL_NAME_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 DEPLOYMENT_ID_PATTERN = re.compile(r"^[0-9a-f]{16}$")
+_CONTENT_INSTALL_LOCK = threading.Lock()
 
 
 class AgentRequestError(ValueError):
@@ -1186,6 +1187,22 @@ def _install_verified_file(
     expected_size: int,
 ) -> bool:
     """Instala por conteúdo; um alvo idêntico é reutilizado sem sobrescrita."""
+    with _CONTENT_INSTALL_LOCK:
+        return _install_verified_file_unlocked(
+            source,
+            target,
+            expected_sha256=expected_sha256,
+            expected_size=expected_size,
+        )
+
+
+def _install_verified_file_unlocked(
+    source: Path,
+    target: Path,
+    *,
+    expected_sha256: str,
+    expected_size: int,
+) -> bool:
     if target.exists():
         verify_file(
             target,

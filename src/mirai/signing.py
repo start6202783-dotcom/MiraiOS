@@ -18,6 +18,14 @@ DSSE_PAYLOAD_TYPE = "application/vnd.mirai.artifact-digest.v1+json"
 SIGNATURE_SUFFIX = ".sig"
 KEY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 MAX_SIGNATURE_SIZE_BYTES = 64 * 1024
+SIGNABLE_EXTENSIONS = {".mirai", ".json", ".mirai-evidence", ".mirai-replay"}
+JSON_ARTIFACT_KINDS = {
+    "mirai.arena-result": "arena-result",
+    "mirai.compatibility-matrix": "compatibility-matrix",
+    "mirai.failure-lab": "failure-lab-report",
+    "mirai.model-passport": "model-passport",
+    "mirai.replay-result": "replay-result",
+}
 
 
 def _crypto() -> tuple[Any, Any, Any]:
@@ -159,12 +167,29 @@ def _artifact_payload(
     target = path.expanduser().resolve()
     if not target.is_file():
         raise MiraiRuntimeError(f"artefato não encontrado: {target}")
-    if target.suffix.lower() not in {".mirai", ".json"}:
+    suffix = target.suffix.lower()
+    if suffix not in SIGNABLE_EXTENSIONS:
         raise MiraiRuntimeError(
-            "somente pacotes .mirai e relatórios JSON podem ser assinados"
+            "somente pacotes .mirai, arquivos .json, .mirai-evidence e "
+            ".mirai-replay podem ser assinados"
         )
     digest, size_bytes = stable_file_digest(target)
-    kind = "mirai-package" if target.suffix.lower() == ".mirai" else "pilot-report"
+    if suffix == ".mirai":
+        kind = "mirai-package"
+    elif suffix == ".mirai-evidence":
+        kind = "evidence-bundle"
+    elif suffix == ".mirai-replay":
+        kind = "replay-bundle"
+    else:
+        kind = "pilot-report"
+        try:
+            payload = strict_json_loads(target.read_bytes(), label="artefato JSON")
+        except (OSError, MiraiRuntimeError):
+            payload = None
+        if isinstance(payload, dict):
+            format_name = payload.get("format")
+            if isinstance(format_name, str):
+                kind = JSON_ARTIFACT_KINDS.get(format_name, kind)
     return {
         "version": 1,
         "kind": kind,

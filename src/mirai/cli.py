@@ -27,11 +27,19 @@ from .agent_client import (
     set_agent_client_role,
 )
 from .anchors import DEFAULT_ANCHOR_PATH, anchor_device, anchor_fleet
+from .arena import (
+    ARENA_CATEGORIES,
+    calculate_edge_score,
+    create_arena_result,
+    load_arena_result,
+    verify_arena_result,
+)
 from .benchmark import (
     DEFAULT_BENCHMARK_RUNS,
     DEFAULT_WARMUP_RUNS,
     benchmark_model,
 )
+from .compatibility import add_compatibility_result, load_compatibility_matrix
 from .devices import (
     add_device,
     get_device,
@@ -42,6 +50,8 @@ from .devices import (
 )
 from .discovery import discover_agents
 from .errors import MiraiRuntimeError
+from .evidence import create_evidence_bundle, verify_evidence_bundle
+from .failure_lab import run_failure_lab
 from .fit import fit_model
 from .fleet import (
     DEFAULT_ROLLOUT_DIRECTORY,
@@ -50,6 +60,7 @@ from .fleet import (
     observe_fleet,
     select_devices,
 )
+from .hardware import collect_hardware_identity
 from .history import (
     get_pilot_report,
     list_pilot_history,
@@ -61,6 +72,11 @@ from .package import (
     create_mirai_package,
     validate_package_metadata,
 )
+from .passport import (
+    create_model_passport,
+    load_model_passport,
+    verify_model_passport,
+)
 from .pilot import (
     DEFAULT_PILOT_CONFIG,
     DEFAULT_REPORT_DIRECTORY,
@@ -70,7 +86,8 @@ from .pilot import (
     write_pilot_template,
 )
 from .providers import PROVIDER_PROFILES, list_runtime_backends
-from .runtime import run_model
+from .replay import create_replay_bundle, run_replay
+from .runtime import load_runtime_dependencies, run_model
 from .security import ACCESS_ROLES, rotate_agent_identity
 from .signing import (
     generate_signing_key,
@@ -80,6 +97,7 @@ from .signing import (
 )
 
 VERSION = f"MiraiOS CLI v{__version__} (Projeto Hikari)"
+DEFAULT_COMPATIBILITY_MATRIX = Path(".mirai/compatibility-matrix.json")
 
 
 def positive_int(value: str) -> int:
@@ -131,6 +149,14 @@ def non_negative_float(value: str) -> float:
         raise argparse.ArgumentTypeError("deve ser um número") from error
     if not math.isfinite(parsed_value) or parsed_value < 0:
         raise argparse.ArgumentTypeError("deve ser finito e não negativo")
+    return parsed_value
+
+
+def positive_float(value: str) -> float:
+    """Converte um argumento em número finito estritamente positivo."""
+    parsed_value = non_negative_float(value)
+    if parsed_value == 0:
+        raise argparse.ArgumentTypeError("deve ser maior que zero")
     return parsed_value
 
 
@@ -260,7 +286,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sign_parser = subparsers.add_parser(
         "sign",
-        help="assina um pacote .mirai ou relatório JSON com DSSE/Ed25519",
+        help="assina um artefato Mirai com DSSE/Ed25519",
     )
     sign_parser.add_argument("artifact_path", type=Path, metavar="ARTEFATO")
     sign_parser.add_argument("--key", required=True, type=Path, metavar="CHAVE_PRIVADA")
@@ -308,7 +334,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     benchmark_parser = subparsers.add_parser(
         "benchmark",
-        help="mede latência e vazão do modelo",
+        help="mede latência, estabilidade e vazão do modelo",
     )
     benchmark_parser.add_argument("model_path", type=Path, metavar="ARQUIVO")
     benchmark_parser.add_argument(
@@ -325,7 +351,228 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="QUANTIDADE",
         help=f"inferências de aquecimento (padrão: {DEFAULT_WARMUP_RUNS})",
     )
+    benchmark_parser.add_argument(
+        "--provider-profile",
+        choices=tuple(PROVIDER_PROFILES),
+        default="auto",
+    )
     _add_input_arguments(benchmark_parser)
+
+    hardware_parser = subparsers.add_parser(
+        "hardware",
+        help="mostra a identidade de hardware privacy-safe",
+    )
+    hardware_parser.add_argument(
+        "--category",
+        choices=tuple(sorted(ARENA_CATEGORIES)),
+    )
+
+    passport_parser = subparsers.add_parser(
+        "passport",
+        help="cria e verifica o Model Passport",
+    )
+    passport_subparsers = passport_parser.add_subparsers(
+        dest="passport_command",
+        metavar="AÇÃO",
+        required=True,
+    )
+    passport_create_parser = passport_subparsers.add_parser(
+        "create",
+        help="descreve identidade, contrato, origem e limites do modelo",
+    )
+    passport_create_parser.add_argument("artifact_path", type=Path, metavar="ARQUIVO")
+    passport_create_parser.add_argument("--output", required=True, type=Path)
+    passport_create_parser.add_argument("--author")
+    passport_create_parser.add_argument("--license", dest="license_expression")
+    passport_create_parser.add_argument("--source-uri")
+    passport_create_parser.add_argument("--intended-use")
+    passport_create_parser.add_argument(
+        "--limitation",
+        action="append",
+        default=[],
+    )
+    passport_create_parser.add_argument("--replace", action="store_true")
+    passport_verify_parser = passport_subparsers.add_parser(
+        "verify",
+        help="confere o passaporte contra o artefato atual",
+    )
+    passport_verify_parser.add_argument("passport_path", type=Path)
+    passport_verify_parser.add_argument("artifact_path", type=Path)
+    passport_show_parser = passport_subparsers.add_parser(
+        "show",
+        help="valida e mostra o passaporte",
+    )
+    passport_show_parser.add_argument("passport_path", type=Path)
+
+    replay_parser = subparsers.add_parser(
+        "replay",
+        help="captura e reproduz uma inferência local",
+    )
+    replay_subparsers = replay_parser.add_subparsers(
+        dest="replay_command",
+        metavar="AÇÃO",
+        required=True,
+    )
+    replay_capture_parser = replay_subparsers.add_parser(
+        "capture",
+        help="captura entradas e resultado esperado com consentimento explícito",
+    )
+    replay_capture_parser.add_argument("artifact_path", type=Path, metavar="ARQUIVO")
+    replay_capture_parser.add_argument("--output", required=True, type=Path)
+    replay_capture_parser.add_argument(
+        "--capture-inputs",
+        action="store_true",
+        help="confirma que o bundle pode armazenar dados sensíveis",
+    )
+    replay_capture_parser.add_argument(
+        "--tolerance",
+        type=unit_interval,
+        default=1e-6,
+    )
+    replay_capture_parser.add_argument(
+        "--provider-profile",
+        choices=tuple(PROVIDER_PROFILES),
+        default="auto",
+    )
+    replay_capture_parser.add_argument("--sign-key", type=Path)
+    replay_capture_parser.add_argument("--replace", action="store_true")
+    _add_input_arguments(replay_capture_parser)
+    replay_run_parser = replay_subparsers.add_parser(
+        "run",
+        help="reexecuta o bundle e compara o resultado",
+    )
+    replay_run_parser.add_argument("bundle_path", type=Path)
+    replay_run_parser.add_argument("artifact_path", type=Path)
+
+    evidence_parser = subparsers.add_parser(
+        "evidence",
+        help="cria e verifica um Evidence Bundle portátil",
+    )
+    evidence_subparsers = evidence_parser.add_subparsers(
+        dest="evidence_command",
+        metavar="AÇÃO",
+        required=True,
+    )
+    evidence_create_parser = evidence_subparsers.add_parser(
+        "create",
+        help="reúne relatório, assinatura, passaporte e anexos por digest",
+    )
+    evidence_create_parser.add_argument("report_path", type=Path)
+    evidence_create_parser.add_argument("--output", required=True, type=Path)
+    evidence_create_parser.add_argument("--artifact", type=Path)
+    evidence_create_parser.add_argument("--passport", type=Path)
+    evidence_create_parser.add_argument(
+        "--include",
+        dest="include_paths",
+        action="append",
+        type=Path,
+        default=[],
+    )
+    evidence_create_parser.add_argument("--no-companions", action="store_true")
+    evidence_create_parser.add_argument("--sign-key", type=Path)
+    evidence_create_parser.add_argument("--replace", action="store_true")
+    evidence_verify_parser = evidence_subparsers.add_parser(
+        "verify",
+        help="confere estrutura, conteúdo e artefato opcional",
+    )
+    evidence_verify_parser.add_argument("bundle_path", type=Path)
+    evidence_verify_parser.add_argument("--artifact", type=Path)
+
+    arena_parser = subparsers.add_parser(
+        "arena",
+        help="gera resultados padronizados para a Benchmark Arena",
+    )
+    arena_subparsers = arena_parser.add_subparsers(
+        dest="arena_command",
+        metavar="AÇÃO",
+        required=True,
+    )
+    arena_run_parser = arena_subparsers.add_parser(
+        "run",
+        help="executa a suíte Mirai Edge single-stream",
+    )
+    arena_run_parser.add_argument("artifact_path", type=Path, metavar="ARQUIVO")
+    arena_run_parser.add_argument("--output", required=True, type=Path)
+    arena_run_parser.add_argument("--runs", type=positive_int, default=50)
+    arena_run_parser.add_argument("--warmup", type=non_negative_int, default=3)
+    arena_run_parser.add_argument(
+        "--category",
+        choices=tuple(sorted(ARENA_CATEGORIES)),
+    )
+    arena_run_parser.add_argument("--precision", default="unknown")
+    arena_run_parser.add_argument(
+        "--provider-profile",
+        choices=tuple(PROVIDER_PROFILES),
+        default="auto",
+    )
+    arena_run_parser.add_argument("--sign-key", type=Path)
+    arena_run_parser.add_argument("--replace", action="store_true")
+    _add_input_arguments(arena_run_parser)
+    arena_verify_parser = arena_subparsers.add_parser(
+        "verify",
+        help="valida o resultado e o artefato opcional",
+    )
+    arena_verify_parser.add_argument("result_path", type=Path)
+    arena_verify_parser.add_argument("--artifact", type=Path)
+    arena_score_parser = arena_subparsers.add_parser(
+        "score",
+        help="calcula conformidade com um SLA explícito",
+    )
+    arena_score_parser.add_argument("result_path", type=Path)
+    arena_score_parser.add_argument("--target-p95-ms", required=True, type=positive_float)
+    arena_score_parser.add_argument("--target-ips", required=True, type=positive_float)
+    arena_score_parser.add_argument(
+        "--max-cv",
+        type=positive_float,
+        default=0.25,
+    )
+
+    compatibility_parser = subparsers.add_parser(
+        "compatibility",
+        help="mantém uma Compatibility Matrix local",
+    )
+    compatibility_subparsers = compatibility_parser.add_subparsers(
+        dest="compatibility_command",
+        metavar="AÇÃO",
+        required=True,
+    )
+    compatibility_add_parser = compatibility_subparsers.add_parser(
+        "add",
+        help="adiciona um resultado da Arena à matriz",
+    )
+    compatibility_add_parser.add_argument("result_path", type=Path)
+    compatibility_add_parser.add_argument(
+        "--matrix",
+        type=Path,
+        default=DEFAULT_COMPATIBILITY_MATRIX,
+    )
+    compatibility_add_parser.add_argument("--signature", type=Path)
+    compatibility_add_parser.add_argument("--key", type=Path)
+    compatibility_show_parser = compatibility_subparsers.add_parser(
+        "show",
+        help="valida e resume a matriz",
+    )
+    compatibility_show_parser.add_argument(
+        "--matrix",
+        type=Path,
+        default=DEFAULT_COMPATIBILITY_MATRIX,
+    )
+
+    failure_lab_parser = subparsers.add_parser(
+        "failure-lab",
+        help="injeta falhas controladas em cópias temporárias",
+    )
+    failure_lab_parser.add_argument("artifact_path", type=Path, metavar="ARQUIVO")
+    failure_lab_parser.add_argument("--output", required=True, type=Path)
+    failure_lab_parser.add_argument("--benchmark-runs", type=positive_int, default=3)
+    failure_lab_parser.add_argument(
+        "--provider-profile",
+        choices=tuple(PROVIDER_PROFILES),
+        default="auto",
+    )
+    failure_lab_parser.add_argument("--sign-key", type=Path)
+    failure_lab_parser.add_argument("--replace", action="store_true")
+    _add_input_arguments(failure_lab_parser)
 
     fit_parser = subparsers.add_parser(
         "fit",
@@ -920,6 +1167,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.warmup,
                 args.input_specs,
                 args.layout,
+                args.provider_profile,
             )
             print(f"[MiraiOS] Aquecimento: {stats.warmup_runs} execuções")
             print(f"[MiraiOS] Inferências medidas: {stats.runs}")
@@ -927,8 +1175,196 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"[MiraiOS] Latência média: {stats.average_ms:.2f} ms")
             print(f"[MiraiOS] Mediana: {stats.median_ms:.2f} ms")
             print(f"[MiraiOS] P95: {stats.p95_ms:.2f} ms")
+            print(f"[MiraiOS] P99: {stats.p99_ms:.2f} ms")
+            print(
+                "[MiraiOS] Coeficiente de variação: "
+                f"{stats.coefficient_of_variation:.4f}"
+            )
             print(f"[MiraiOS] Inferências por segundo (IPS): {stats.inferences_per_second:.2f}")
             return 0
+
+        if args.command == "hardware":
+            ort, _ = load_runtime_dependencies()
+            profile = collect_hardware_identity(
+                providers=list(ort.get_available_providers()),
+                category=args.category,
+            )
+            print(json.dumps(profile, indent=2, ensure_ascii=False))
+            return 0
+
+        if args.command == "passport":
+            if args.passport_command == "create":
+                passport = create_model_passport(
+                    args.artifact_path,
+                    args.output,
+                    author=args.author,
+                    license_expression=args.license_expression,
+                    source_uri=args.source_uri,
+                    intended_use=args.intended_use,
+                    limitations=args.limitation,
+                    replace=args.replace,
+                )
+                print(f"[MiraiOS] Model Passport: {args.output}")
+                print(f"[MiraiOS] SHA-256 do artefato: {passport['subject']['sha256']}")
+                return 0
+            if args.passport_command == "verify":
+                passport = verify_model_passport(
+                    args.passport_path,
+                    args.artifact_path,
+                )
+                print("[MiraiOS] Model Passport válido para o artefato.")
+                print(f"[MiraiOS] SHA-256: {passport['subject']['sha256']}")
+                return 0
+            passport = load_model_passport(args.passport_path)
+            print(json.dumps(passport, indent=2, ensure_ascii=False))
+            return 0
+
+        if args.command == "replay":
+            if args.replay_command == "capture":
+                replay = create_replay_bundle(
+                    args.artifact_path,
+                    args.output,
+                    input_specs=args.input_specs,
+                    layout=args.layout,
+                    provider_profile=args.provider_profile,
+                    tolerance=args.tolerance,
+                    capture_inputs=args.capture_inputs,
+                    replace=args.replace,
+                )
+                print(f"[MiraiOS] Replay capturado: {args.output}")
+                print(f"[MiraiOS] Replay ID: {replay['replay_id']}")
+                if args.sign_key is not None:
+                    signed = sign_artifact(
+                        args.output,
+                        args.sign_key,
+                        replace=args.replace,
+                    )
+                    print(f"[MiraiOS] Assinatura DSSE: {signed['signature']}")
+                return 0
+            replay_result = run_replay(args.bundle_path, args.artifact_path)
+            print(json.dumps(replay_result, indent=2, ensure_ascii=False))
+            return 0 if replay_result["passed"] else 1
+
+        if args.command == "evidence":
+            if args.evidence_command == "create":
+                evidence = create_evidence_bundle(
+                    args.report_path,
+                    args.output,
+                    artifact_path=args.artifact,
+                    passport_path=args.passport,
+                    include_paths=args.include_paths,
+                    include_companions=not args.no_companions,
+                    replace=args.replace,
+                )
+                print(f"[MiraiOS] Evidence Bundle: {args.output}")
+                print(f"[MiraiOS] Bundle ID: {evidence['bundle_id']}")
+                print(
+                    "[MiraiOS] Itens verificados: "
+                    f"{evidence['manifest']['item_count']}"
+                )
+                if args.sign_key is not None:
+                    signed = sign_artifact(
+                        args.output,
+                        args.sign_key,
+                        replace=args.replace,
+                    )
+                    print(f"[MiraiOS] Assinatura DSSE: {signed['signature']}")
+                return 0
+            evidence = verify_evidence_bundle(
+                args.bundle_path,
+                artifact_path=args.artifact,
+            )
+            print("[MiraiOS] Evidence Bundle íntegro.")
+            print(f"[MiraiOS] Bundle ID: {evidence['bundle_id']}")
+            print(f"[MiraiOS] Itens: {evidence['manifest']['item_count']}")
+            return 0
+
+        if args.command == "arena":
+            if args.arena_command == "run":
+                arena_outcome = create_arena_result(
+                    args.artifact_path,
+                    args.output,
+                    runs=args.runs,
+                    warmup_runs=args.warmup,
+                    input_specs=args.input_specs,
+                    layout=args.layout,
+                    category=args.category,
+                    precision=args.precision,
+                    provider_profile=args.provider_profile,
+                    signing_key_path=args.sign_key,
+                    replace=args.replace,
+                )
+                metrics = arena_outcome.report["metrics"]
+                print(f"[MiraiOS] Resultado da Arena: {arena_outcome.report_path}")
+                print(f"[MiraiOS] Result ID: {arena_outcome.report['result_id']}")
+                print(f"[MiraiOS] P95: {metrics['p95_ms']:.3f} ms")
+                print(f"[MiraiOS] P99: {metrics['p99_ms']:.3f} ms")
+                print(
+                    "[MiraiOS] IPS: "
+                    f"{metrics['inferences_per_second']:.3f}"
+                )
+                if arena_outcome.signature_path is not None:
+                    print(
+                        f"[MiraiOS] Assinatura DSSE: {arena_outcome.signature_path}"
+                    )
+                return 0
+            if args.arena_command == "verify":
+                report = verify_arena_result(
+                    args.result_path,
+                    artifact_path=args.artifact,
+                )
+                print("[MiraiOS] Resultado da Arena válido.")
+                print(f"[MiraiOS] Result ID: {report['result_id']}")
+                return 0
+            report = load_arena_result(args.result_path)
+            score = calculate_edge_score(
+                report,
+                target_p95_ms=args.target_p95_ms,
+                target_ips=args.target_ips,
+                max_coefficient_of_variation=args.max_cv,
+            )
+            print(json.dumps(score, indent=2, ensure_ascii=False))
+            return 0 if score["passed"] else 1
+
+        if args.command == "compatibility":
+            if args.compatibility_command == "add":
+                matrix = add_compatibility_result(
+                    args.matrix,
+                    args.result_path,
+                    signature_path=args.signature,
+                    public_key_path=args.key,
+                )
+                print(f"[MiraiOS] Compatibility Matrix: {args.matrix}")
+                print(f"[MiraiOS] Resultados: {matrix['summary']['result_count']}")
+                print(f"[MiraiOS] Hardwares: {matrix['summary']['hardware_count']}")
+                return 0
+            matrix = load_compatibility_matrix(args.matrix)
+            print(json.dumps(matrix["summary"], indent=2, ensure_ascii=False))
+            return 0
+
+        if args.command == "failure-lab":
+            report = run_failure_lab(
+                args.artifact_path,
+                args.output,
+                input_specs=args.input_specs,
+                layout=args.layout,
+                provider_profile=args.provider_profile,
+                benchmark_runs=args.benchmark_runs,
+                signing_key_path=args.sign_key,
+                replace=args.replace,
+            )
+            print(f"[MiraiOS] Failure Lab: {args.output}")
+            print(f"[MiraiOS] Lab ID: {report['lab_id']}")
+            print(f"[MiraiOS] Status: {report['status']}")
+            if args.sign_key is not None:
+                print(
+                    "[MiraiOS] Assinatura DSSE: "
+                    f"{args.output.with_name(args.output.name + '.sig')}"
+                )
+            for check in report["checks"]:
+                marker = "✓" if check["passed"] else "✗"
+                print(f"{marker} {check['name']}")
+            return 0 if report["status"] == "passed" else 1
 
         if args.command == "fit":
             print(f"[MiraiOS] Fit: avaliando {args.model_path.name}...")

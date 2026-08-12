@@ -5,6 +5,91 @@ Todas as mudanças relevantes do MiraiOS serão documentadas neste arquivo.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e
 o projeto utiliza [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.14.0] - 2026-08-11
+
+### Adicionado
+
+- Model Passport determinístico com identidade do artefato e modelo interno,
+  contrato do runtime, precisão, opsets, limites estruturais, proveniência
+  declarada, uso pretendido e limitações;
+- `mirai passport create`, `verify` e `show`;
+- Mirai Replay com captura explícita de entradas, anexos verificados,
+  substituição de caminhos locais, resultado normalizado, tolerância numérica
+  e vínculo obrigatório ao SHA-256 do artefato;
+- Evidence Bundle portátil com relatório raiz, companheiros automáticos,
+  passaporte e anexos opcionais, manifesto recalculável e limites por item,
+  total e arquivo;
+- identidade de hardware privacy-safe com IDs distintos para hardware e
+  ambiente, sem hostname, MAC, IP ou números de série;
+- Arena Result v1 para a suíte `mirai-edge-v1` single-stream, com descrição do
+  workload, hardware, runtime, providers, P95, P99, IPS, desvio-padrão,
+  coeficiente de variação e digest das amostras;
+- Mirai Edge Score como conformidade transparente com metas explícitas de
+  latência, vazão e estabilidade, sem nota universal;
+- Compatibility Matrix local, ordenada e idempotente, com evidência
+  `self-measured` ou `signed-verified` e prontidão por hardware/workload;
+- Failure Lab com corrupção e truncamento de cópias temporárias,
+  repetibilidade, smoke benchmark e prova de preservação do original;
+- tipos DSSE específicos para Passport, Arena, Matrix, Failure Lab, Replay e
+  Evidence Bundle, preservando relatórios Pilot antigos;
+- comandos `mirai hardware`, `replay`, `evidence`, `arena`, `compatibility` e
+  `failure-lab`;
+- especificação em `docs/hikari-v0.14.md` e pesquisa de padrões em
+  `docs/research/0002-evidence-benchmark.md`.
+
+### Segurança e privacidade
+
+- Replay recusa captura sem `--capture-inputs` e declara que o bundle pode
+  conter dados sensíveis;
+- caminhos locais de anexos são substituídos por referências internas com
+  tamanho, tipo e SHA-256 antes da reprodução;
+- Arena publica descritores e digests, nunca valores ou caminhos de entrada;
+- identidade de hardware exclui identificadores pessoais do host;
+- loaders recusam campos extras, duplicatas, digests divergentes, IDs
+  recalculados incorretos, tamanhos excessivos e tipos incompatíveis;
+- Evidence Bundle não incorpora os bytes do modelo e declara expressamente
+  que integridade não é certificação independente;
+- Compatibility Matrix nunca autoemite certificação; até candidatos com
+  múltiplas evidências permanecem `not-certified`;
+- Failure Lab nunca modifica o artefato original e não se apresenta como
+  sandbox, fuzzer ou prova de segurança.
+- instalação content-addressed no Agent é serializada durante a publicação,
+  eliminando uma corrida rara entre hard link, remoção da origem e digest
+  estável sob deploys concorrentes.
+
+### Alterado
+
+- benchmark local passa a expor P99, desvio-padrão, coeficiente de variação e
+  digest das amostras, preservando as métricas anteriores;
+- `benchmark_model` aceita perfil de provider explícito sem quebrar chamadas
+  existentes;
+- assinatura de JSON identifica o tipo pelo campo `format`, com fallback
+  compatível para `pilot-report`;
+- CLI e Agent passam à série `0.14`; Mirai Package e protocolo do Agent não
+  mudam.
+
+### Qualidade
+
+- 1.403 testes pytest aprovados, com novos cenários de determinismo,
+  adulteração, privacidade, assinatura tipada, idempotência e fluxo integrado;
+- Ruff, mypy, Bandit, auditoria de dependências, Python 3.10–3.13, ARM64 e
+  cobertura de branches continuam gates obrigatórios.
+
+### Compatibilidade e limites
+
+- Mirai Package permanece no formato v1 e registros anteriores continuam
+  legíveis;
+- Replay e Evidence Bundle são formatos locais v1 novos, sem migração de
+  estado existente;
+- Arena v1 não é uma submissão MLPerf e ainda não mede energia ou memória de
+  pico;
+- não existe serviço público, upload automático, ranking, verificação física
+  ou selo Mirai Certified Hardware nesta versão;
+- assinatura comprova a chave e os bytes, não a veracidade do hardware ou da
+  origem declarada;
+- Edge Scores só podem ser comparados quando workload, suíte e política são os
+  mesmos.
+
 ## [0.13.0] - 2026-08-05
 
 ### Adicionado
